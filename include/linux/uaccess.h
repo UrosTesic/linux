@@ -145,6 +145,42 @@ copy_from_user(void *to, const void __user *from, unsigned long n)
 	return n;
 }
 
+#ifdef CONFIG_TOCTTOU_PROTECTION
+
+#ifdef INLINE_COPY_FROM_USER
+static inline __must_check unsigned long
+_copy_from_user_check(void *to, const void __user *from, unsigned long n)
+{
+	unsigned long res = n;
+	might_fault();
+	if (likely(access_ok(from, n))) {
+		kasan_check_write(to, n);
+		
+		for (unsigned long address_offset = 0; address_offset < n; address_offset += PAGE_SIZE) {
+			/* Iterate through all pages and mark them as RO
+			 * Add the pages to the list of pages locked by this process
+			 * Save whether a page is RO */
+		}
+		res = raw_copy_from_user(to, from, n);
+	}
+	if (unlikely(res))
+		memset(to + (n - res), 0, res);
+	return res;
+}
+#else
+extern __must_check unsigned long
+_copy_from_user_check(void *, const void __user *, unsigned long);
+#endif /* INLINE_COPY_FROM_USER */
+
+static __always_inline unsigned long __must_check
+copy_from_user_check(void *to, const void __user *from, unsigned long n)
+{
+	if (likely(check_copy_size(to, n, false)))
+		n = _copy_from_user_check(to, from, n);
+	return n;
+}
+#endif /* CONFIG_TOCTTOU_PROTECTION */
+
 static __always_inline unsigned long __must_check
 copy_to_user(void __user *to, const void *from, unsigned long n)
 {

@@ -1265,6 +1265,19 @@ struct task_struct {
 	unsigned long			prev_lowest_stack;
 #endif
 
+#ifdef CONFIG_TOCTTOU_PROTECTION
+	/* Used for copy_from_user to know whether to release a page lock */
+	unsigned tocttou_locked_pages_num;
+
+	/* A list of pages locked to prevent TOCTTOU by this process
+	 * Should we use a RB-tree here? */
+	struct list_head tocttou_locked_pages_list;
+
+	/* A list of processes waiting for the current process to relinquish locks
+	 * on pages with syscall arguments */
+	struct list_head tocttou_waiting processes;
+#endif
+
 	/*
 	 * New fields for task_struct should be added above here, so that
 	 * they are included in the randomized portion of task_struct.
