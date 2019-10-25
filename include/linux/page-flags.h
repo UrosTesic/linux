@@ -131,6 +131,9 @@ enum pageflags {
 	PG_young,
 	PG_idle,
 #endif
+#ifdef CONFIG_TOCTTOU_PROTECTION
+	PG_tocttou_locked,
+#endif
 	__NR_PAGEFLAGS,
 
 	/* Filesystems */
@@ -429,6 +432,10 @@ TESTPAGEFLAG(Young, young, PF_ANY)
 SETPAGEFLAG(Young, young, PF_ANY)
 TESTCLEARFLAG(Young, young, PF_ANY)
 PAGEFLAG(Idle, idle, PF_ANY)
+#endif
+
+#ifdef CONFIG_TOCTTOU_PROTECTION
+PAGEFLAG(Tocttou, tocttou_locked, PF_ANY)
 #endif
 
 /*

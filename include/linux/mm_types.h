@@ -219,6 +219,12 @@ struct page {
 #ifdef LAST_CPUPID_NOT_IN_PAGE_FLAGS
 	int _last_cpupid;
 #endif
+
+#ifdef CONFIG_TOCTTOU_PROTECTION
+	bool old_write_perm;
+	struct completion tocttou_protection;
+	unsigned tocttou_refs;
+#endif
 } _struct_page_alignment;
 
 /*

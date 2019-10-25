@@ -377,6 +377,10 @@ extern int sysctl_min_slab_ratio;
 extern int page_evictable(struct page *page);
 extern void check_move_unevictable_pages(struct pagevec *pvec);
 
+#ifdef CONFIG_TOCTTOU_PROTECTION
+extern int page_tocttou_protected(struct page *page);
+#endif
+
 extern int kswapd_run(int nid);
 extern void kswapd_stop(int nid);
 

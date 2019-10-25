@@ -1585,6 +1585,12 @@ int __isolate_lru_page(struct page *page, isolate_mode_t mode)
 	if (PageUnevictable(page) && !(mode & ISOLATE_UNEVICTABLE))
 		return ret;
 
+#ifdef CONFIG_TOCTTOU_PROTECTION
+	/* Do not touch pinned pages */
+	if (PageToctou(page))
+		return ret;
+#endif
+
 	ret = -EBUSY;
 
 	/*
@@ -4324,6 +4330,10 @@ int page_evictable(struct page *page)
 	rcu_read_unlock();
 	return ret;
 }
+
+#ifdef CONFIG_TOCTTOU_PROTECTION
+int page_tocttou_protected(struct page *page)
+#endif
 
 /**
  * check_move_unevictable_pages - check pages for evictability and move to

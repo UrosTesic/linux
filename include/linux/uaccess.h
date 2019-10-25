@@ -9,6 +9,7 @@
 #define uaccess_kernel() segment_eq(get_fs(), KERNEL_DS)
 
 #include <asm/uaccess.h>
+#include <linux/mm_types.h>
 
 /*
  * Architectures should provide two primitives (raw_copy_{to,from}_user())
@@ -102,6 +103,67 @@ __copy_to_user(void __user *to, const void *from, unsigned long n)
 	return raw_copy_to_user(to, from, n);
 }
 
+#ifdef CONFIG_TOCTTOU_PROTECTION
+static struct page* get_and_lock_page_from_va(unsigned long vaddr, bool old_write)
+{
+	pgd_t *pgd;
+	pud_t *pud;
+	pmd_t *pmd;
+	pte_t *ptep, pte;
+	struct page *target_page;
+
+	pgd = pgd_offset(current->mm, vaddr);
+	if (!pgd)
+		return NULL;
+
+	pud = pud_offset(pgd, vaddr);
+	if (!pud)
+		return NULL;
+
+	pmd = pmd_offset(pud, vaddr);
+	if (!pmd)
+		return NULL;
+
+	ptep = pte_offset_map(pmd, vaddr);
+	if (!ptep)
+		return NULL;
+
+	pte = *ptep;
+
+	target_page = pte_page(pte);
+	lock_page(target_page);
+	target_page->tocttou_ref--;
+	if (!target_page->tocttou_ref)
+	{	ClearPageTocttou(target_page);
+
+		if (old_write)
+			*ptep = pte_wrprotect(pte)
+		else
+			*ptep = pte_wrclear(pte);
+
+		complete_all(target_page->tocttou_protection);
+	}
+	unlock_page(target_page);
+	
+	pte_unmap(ptep);
+
+	return target_page;
+}
+
+static inline __must_check unsigned long
+_copy_from_user(void *to, const void __user *from, unsigned long n)
+{
+	unsigned long res = n;
+	might_fault();
+	if (likely(access_ok(from, n))) {
+		kasan_check_write(to, n);
+		res = raw_copy_from_user(to, from, n);
+	}
+	if (unlikely(res))
+		memset(to + (n - res), 0, res);
+	return res;
+}
+#else
 #ifdef INLINE_COPY_FROM_USER
 static inline __must_check unsigned long
 _copy_from_user(void *to, const void __user *from, unsigned long n)
@@ -119,7 +181,8 @@ _copy_from_user(void *to, const void __user *from, unsigned long n)
 #else
 extern __must_check unsigned long
 _copy_from_user(void *, const void __user *, unsigned long);
-#endif
+#endif /* INLINE_COPY_FROM_USER */
+#endif /* CONFIG_TOCTTOU_PROTECTION */
 
 #ifdef INLINE_COPY_TO_USER
 static inline __must_check unsigned long
@@ -137,6 +200,7 @@ extern __must_check unsigned long
 _copy_to_user(void __user *, const void *, unsigned long);
 #endif
 
+
 static __always_inline unsigned long __must_check
 copy_from_user(void *to, const void __user *from, unsigned long n)
 {
@@ -145,9 +209,47 @@ copy_from_user(void *to, const void __user *from, unsigned long n)
 	return n;
 }
 
+
 #ifdef CONFIG_TOCTTOU_PROTECTION
 
-#ifdef INLINE_COPY_FROM_USER
+//#ifdef INLINE_COPY_FROM_USER
+
+static struct page* get_and_lock_page_from_va(unsigned long vaddr, bool *old_write)
+{
+	pgd_t *pgd;
+	pud_t *pud;
+	pmd_t *pmd;
+	pte_t *ptep, pte;
+	struct page *target_page;
+
+	pgd = pgd_offset(current->mm, vaddr);
+	if (!pgd)
+		return NULL;
+
+	pud = pud_offset(pgd, vaddr);
+	if (!pud)
+		return NULL;
+
+	pmd = pmd_offset(pud, vaddr);
+	if (!pmd)
+		return NULL;
+
+	ptep = pte_offset_map(pmd, vaddr);
+	if (!ptep)
+		return NULL;
+
+	pte = *ptep;
+
+	*old_write = pte_write(pte);
+	*ptep = pte_wrprotect(pte)
+
+	target_page = pte_page(pte);
+	
+	pte_unmap(ptep);
+
+	return target_page;
+}
+
 static inline __must_check unsigned long
 _copy_from_user_check(void *to, const void __user *from, unsigned long n)
 {
@@ -156,21 +258,35 @@ _copy_from_user_check(void *to, const void __user *from, unsigned long n)
 	if (likely(access_ok(from, n))) {
 		kasan_check_write(to, n);
 		
+		
 		for (unsigned long address_offset = 0; address_offset < n; address_offset += PAGE_SIZE) {
 			/* Iterate through all pages and mark them as RO
 			 * Add the pages to the list of pages locked by this process
 			 * Save whether a page is RO */
+			unsigned long addr = (unsigned long) from;
+			bool old_write = 0;
+
+			down_read(&current->mm->mmap_sem);
+			struct page *current_page = get_ro_page_from_va(addr + address_offset, &old_write);
+			activate_page(current_page);
+			lock_page(current_page);
+			up_read(&current->mm->mmap_sem);
+			reinit_completion(current_page->tocttou_protection);
+			SetPageTocttou(current_page);
+			current_page->old_write_perm = old_write;
+
 		}
+		
 		res = raw_copy_from_user(to, from, n);
 	}
 	if (unlikely(res))
 		memset(to + (n - res), 0, res);
 	return res;
 }
-#else
-extern __must_check unsigned long
-_copy_from_user_check(void *, const void __user *, unsigned long);
-#endif /* INLINE_COPY_FROM_USER */
+//#else
+//extern __must_check unsigned long
+//_copy_from_user_check(void *, const void __user *, unsigned long);
+//#endif /* INLINE_COPY_FROM_USER */
 
 static __always_inline unsigned long __must_check
 copy_from_user_check(void *to, const void __user *from, unsigned long n)

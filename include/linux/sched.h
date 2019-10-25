@@ -1271,11 +1271,11 @@ struct task_struct {
 
 	/* A list of pages locked to prevent TOCTTOU by this process
 	 * Should we use a RB-tree here? */
-	struct list_head tocttou_locked_pages_list;
+	struct list_head *tocttou_locked_pages_list;
 
 	/* A list of processes waiting for the current process to relinquish locks
 	 * on pages with syscall arguments */
-	struct list_head tocttou_waiting processes;
+	struct completion *tocttou_protection_complete;
 #endif
 
 	/*
