@@ -4333,6 +4333,9 @@ int page_evictable(struct page *page)
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
 int page_tocttou_protected(struct page *page)
+{
+	return PageTocttou(page);
+}
 #endif
 
 /**

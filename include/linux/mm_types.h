@@ -16,6 +16,7 @@
 #include <linux/workqueue.h>
 
 #include <asm/mmu.h>
+#include <asm/atomic.h>
 
 #ifndef AT_VECTOR_SIZE_ARCH
 #define AT_VECTOR_SIZE_ARCH 0
@@ -223,7 +224,7 @@ struct page {
 #ifdef CONFIG_TOCTTOU_PROTECTION
 	bool old_write_perm;
 	struct completion tocttou_protection;
-	unsigned tocttou_refs;
+	atomic_t tocttou_refs;
 #endif
 } _struct_page_alignment;
 

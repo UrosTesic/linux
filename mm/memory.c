@@ -3851,12 +3851,15 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 
 	if (!pte_present(vmf->orig_pte))
 		return do_swap_page(vmf);
-	struct page *accessed_page = pte_page(vmf->orig_pte);
+
+	struct page *accessed_page = vmf->page;
 	if (PageTocttou(accessed_page)) {
-		/* Release mm_sem??? */
+		up_read(current->mm->mmap_sem);
 		wait_for_completion(&current_page->tocttou_protection);
+		down_read(current->mm->mmap_sem);
 		return VM_FAULT_MAJOR;
 	}
+	
 	if (pte_protnone(vmf->orig_pte) && vma_is_accessible(vmf->vma))
 		return do_numa_page(vmf);
 

@@ -1248,7 +1248,7 @@ static inline void page_kasan_tag_reset(struct page *page) { }
 static inline void page_tocttou_init(struct page *page)
 {
 	init_completion(&page->tocttou_protection);
-	page->tocttou_refs = 0;
+	atomic_set(&page->tocttou_refs, 0);
 }
 #else
 static inline void page_tocttou_init(struct page * page) { }

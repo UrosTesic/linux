@@ -1996,6 +1996,13 @@ config SECCOMP
 
 	  If unsure, say Y. Only embedded should say N here.
 
+config TOCTTOU_PROTECTION
+	def_bool y
+	prompt "Time-of-check to time-of-use protection for system call arguments"
+	depends on X86_64
+	---help---
+		EPFL experimental feature. Lorem ipsum dolor sit amet.
+
 source "kernel/Kconfig.hz"
 
 config KEXEC
