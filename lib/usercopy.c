@@ -5,6 +5,7 @@
 /* out-of-line parts */
 
 #ifndef INLINE_COPY_FROM_USER
+#ifndef CONFIG_TOCTTOU_PROTECTION
 unsigned long _copy_from_user(void *to, const void __user *from, unsigned long n)
 {
 	unsigned long res = n;
@@ -18,6 +19,7 @@ unsigned long _copy_from_user(void *to, const void __user *from, unsigned long n
 	return res;
 }
 EXPORT_SYMBOL(_copy_from_user);
+#endif
 #endif
 
 #ifndef INLINE_COPY_TO_USER

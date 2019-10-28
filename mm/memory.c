@@ -3854,9 +3854,9 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 
 	struct page *accessed_page = vmf->page;
 	if (PageTocttou(accessed_page)) {
-		up_read(current->mm->mmap_sem);
-		wait_for_completion(&current_page->tocttou_protection);
-		down_read(current->mm->mmap_sem);
+		up_read(&current->mm->mmap_sem);
+		wait_for_completion(&accessed_page->tocttou_protection);
+		down_read(&current->mm->mmap_sem);
 		return VM_FAULT_MAJOR;
 	}
 	

@@ -1587,7 +1587,7 @@ int __isolate_lru_page(struct page *page, isolate_mode_t mode)
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
 	/* Do not touch pinned pages */
-	if (PageToctou(page))
+	if (PageTocttou(page))
 		return ret;
 #endif
 

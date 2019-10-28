@@ -373,7 +373,7 @@ void nvdimm_badblocks_populate(struct nd_region *nd_region,
 #if IS_ENABLED(CONFIG_ND_CLAIM)
 
 /* max struct page size independent of kernel config */
-#define MAX_STRUCT_PAGE_SIZE 64
+#define MAX_STRUCT_PAGE_SIZE 112
 
 int nvdimm_setup_pfn(struct nd_pfn *nd_pfn, struct dev_pagemap *pgmap);
 int devm_nsio_enable(struct device *dev, struct nd_namespace_io *nsio);

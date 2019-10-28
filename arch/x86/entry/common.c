@@ -276,10 +276,7 @@ __visible inline void syscall_return_slowpath(struct pt_regs *regs)
 }
 
 #ifdef CONFIG_X86_64
-void tocttou_unlock_pages()
-{
-	current->
-}
+
 __visible void do_syscall_64(unsigned long nr, struct pt_regs *regs)
 {
 	struct thread_info *ti;
@@ -288,9 +285,9 @@ __visible void do_syscall_64(unsigned long nr, struct pt_regs *regs)
 	local_irq_enable();
 	ti = current_thread_info();
 
-	// current->tocttou_locked_pages_num = 0;
-	// COMPLETION_INITIALIZER_ONSTACK(syscall_tocttou);
-	// current->tocttou_protection_complete = &syscall_tocttou;
+#ifdef CONFIG_TOCTTOU_PROTECTION
+	current->tocttou_syscall = 0;
+#endif
 
 	if (READ_ONCE(ti->flags) & _TIF_WORK_SYSCALL_ENTRY)
 		nr = syscall_trace_enter(regs);
@@ -306,10 +303,6 @@ __visible void do_syscall_64(unsigned long nr, struct pt_regs *regs)
 		regs->ax = x32_sys_call_table[nr](regs);
 #endif
 	}
-	
-	// tocttou_unlock_pages();
-	// complete_all(&syscall_tocttou);
-	// current->tocttou_proection_complete = NULL;
 
 	syscall_return_slowpath(regs);
 }

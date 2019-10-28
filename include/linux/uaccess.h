@@ -9,9 +9,9 @@
 #define uaccess_kernel() segment_eq(get_fs(), KERNEL_DS)
 
 #include <asm/uaccess.h>
-#include <asm/pgtable.h>
+// #include <asm/pgtable.h>
 #include <linux/mm_types.h>
-#include <linux/swap.h>
+// #include <linux/swap.h>
 
 /*
  * Architectures should provide two primitives (raw_copy_{to,from}_user())
@@ -106,56 +106,9 @@ __copy_to_user(void __user *to, const void *from, unsigned long n)
 }
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
-void unlock_page_from_va(unsigned long vaddr)
-{
-	pgd_t *pgd;
-	p4d_t *p4d;
-	pud_t *pud;
-	pmd_t *pmd;
-	pte_t *ptep, pte;
-	struct page *target_page;
+extern void activate_page(struct page *page);
 
-	pgd = pgd_offset(current->mm, vaddr);
-	if (!pgd)
-		return;
-
-	p4d = p4d_offset(pgd, vaddr);
-	if (!p4d)
-		return;
-
-	pud = pud_offset(p4d, vaddr);
-	if (!pud)
-		return;
-
-	pmd = pmd_offset(pud, vaddr);
-	if (!pmd)
-		return;
-
-	ptep = pte_offset_map(pmd, vaddr);
-	if (!ptep)
-		return;
-
-	pte = *ptep;
-
-	target_page = pte_page(pte);
-	
-	// TO DO: Add a list of permissions. Current version only restores the current VA permissions.
-	//
-	if (atomic_dec_and_test(&target_page->tocttou_refs))
-	{	
-		ClearPageTocttou(target_page);
-		if (target_page->old_write_perm)
-			*ptep = pte_mkwrite(pte);
-		else
-			*ptep = pte_wrprotect(pte);
-
-		complete_all(&target_page->tocttou_protection);
-	}
-
-	pte_unmap(ptep);
-
-	return;
-}
+void unlock_page_from_va(unsigned long vaddr);
 
 static inline __must_check unsigned long
 _copy_from_user(void *to, const void __user *from, unsigned long n)
@@ -166,10 +119,12 @@ _copy_from_user(void *to, const void __user *from, unsigned long n)
 	if (likely(access_ok(from, n))) {
 		kasan_check_write(to, n);
 		res = raw_copy_from_user(to, from, n);
-		for (address_offset = 0; address_offset < n; address_offset += PAGE_SIZE) {
-			down_read(&current->mm->mmap_sem);
-			unlock_page_from_va((unsigned long) from + address_offset);
-			up_read(&current->mm->mmap_sem);
+		if (current->tocttou_syscall) {
+			for (address_offset = 0; address_offset < n; address_offset += PAGE_SIZE) {
+				down_read(&current->mm->mmap_sem);
+				unlock_page_from_va((unsigned long) from + address_offset);
+				up_read(&current->mm->mmap_sem);
+			}
 		}
 	}
 	if (unlikely(res))
@@ -226,50 +181,8 @@ copy_from_user(void *to, const void __user *from, unsigned long n)
 #ifdef CONFIG_TOCTTOU_PROTECTION
 
 //#ifdef INLINE_COPY_FROM_USER
+void lock_page_from_va(unsigned long vaddr);
 
-void lock_page_from_va(unsigned long vaddr)
-{
-	pgd_t *pgd;
-	p4d_t *p4d;
-	pud_t *pud;
-	pmd_t *pmd;
-	pte_t *ptep, pte;
-	struct page *target_page;
-
-	pgd = pgd_offset(current->mm, vaddr);
-	if (!pgd)
-		return;
-
-	p4d = p4d_offset(pgd, vaddr);
-	if (!p4d)
-		return;
-
-	pud = pud_offset(p4d, vaddr);
-	if (!pud)
-		return;
-
-	pmd = pmd_offset(pud, vaddr);
-	if (!pmd)
-		return;
-
-	ptep = pte_offset_map(pmd, vaddr);
-	if (!ptep)
-		return;
-
-	pte = *ptep;
-
-	target_page = pte_page(pte);
-	activate_page(target_page);
-
-	if (atomic_inc_return(&target_page->tocttou_refs) == 1) {
-		target_page->old_write_perm = pte_write(pte);
-		SetPageTocttou(target_page);
-		reinit_completion(&target_page->tocttou_protection);
-	}
-	
-	*ptep = pte_wrprotect(pte);
-	pte_unmap(ptep);
-}
 
 static inline __must_check unsigned long
 _copy_from_user_check(void *to, const void __user *from, unsigned long n)
@@ -291,7 +204,7 @@ _copy_from_user_check(void *to, const void __user *from, unsigned long n)
 			lock_page_from_va(addr + address_offset);
 			up_read(&current->mm->mmap_sem);
 		}
-		
+		current->tocttou_syscall = 1;
 		res = raw_copy_from_user(to, from, n);
 	}
 	if (unlikely(res))

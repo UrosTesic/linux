@@ -1266,7 +1266,7 @@ struct task_struct {
 #endif
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
-	// TO DO: If needed add interface to unlock page the user forgot
+	unsigned tocttou_syscall;
 #endif
 
 	/*
