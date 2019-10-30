@@ -1421,4 +1421,5 @@ long compat_ksys_semtimedop(int semid, struct sembuf __user *tsems,
 			    unsigned int nsops,
 			    const struct old_timespec32 __user *timeout);
 
+asmlinkage long __x64_sys_tocttou_test(long *arg);
 #endif

@@ -3851,8 +3851,9 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 
 	if (!pte_present(vmf->orig_pte))
 		return do_swap_page(vmf);
-
-	struct page *accessed_page = vmf->page;
+	// TO DO: Kernel panic here! accessed_page is 0.
+	//
+	struct page *accessed_page = pte_page();
 	if (PageTocttou(accessed_page)) {
 		up_read(&current->mm->mmap_sem);
 		wait_for_completion(&accessed_page->tocttou_protection);

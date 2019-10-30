@@ -44,6 +44,7 @@ obj-y += rcu/
 obj-y += livepatch/
 obj-y += dma/
 
+obj-y += tocttou_test.o
 obj-$(CONFIG_CHECKPOINT_RESTORE) += kcmp.o
 obj-$(CONFIG_FREEZER) += freezer.o
 obj-$(CONFIG_PROFILING) += profile.o

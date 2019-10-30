@@ -223,6 +223,23 @@ copy_from_user_check(void *to, const void __user *from, unsigned long n)
 		n = _copy_from_user_check(to, from, n);
 	return n;
 }
+
+static __always_inline void 
+copy_from_user_unlock(const void __user *from, unsigned long n)
+{
+	unsigned long res = n;
+	unsigned long address_offset;
+	might_fault();
+	if (likely(access_ok(from, res))) {
+		if (current->tocttou_syscall) {
+			for (address_offset = 0; address_offset < res; address_offset += PAGE_SIZE) {
+				down_read(&current->mm->mmap_sem);
+				unlock_page_from_va((unsigned long) from + address_offset);
+				up_read(&current->mm->mmap_sem);
+			}
+		}
+	}
+}
 #endif /* CONFIG_TOCTTOU_PROTECTION */
 
 static __always_inline unsigned long __must_check
