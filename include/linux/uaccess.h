@@ -114,15 +114,15 @@ static inline __must_check unsigned long
 _copy_from_user(void *to, const void __user *from, unsigned long n)
 {
 	unsigned long res = n;
-	unsigned long address_offset;
+	unsigned long address;
 	might_fault();
 	if (likely(access_ok(from, n))) {
 		kasan_check_write(to, n);
 		res = raw_copy_from_user(to, from, n);
 		if (current->tocttou_syscall) {
-			for (address_offset = 0; address_offset < n; address_offset += PAGE_SIZE) {
+			for (address = (unsigned long) from & PAGE_MASK; address < (unsigned long) from + n; address += PAGE_SIZE) {
 				down_read(&current->mm->mmap_sem);
-				unlock_page_from_va((unsigned long) from + address_offset);
+				unlock_page_from_va(address);
 				up_read(&current->mm->mmap_sem);
 			}
 		}
@@ -188,20 +188,19 @@ static inline __must_check unsigned long
 _copy_from_user_check(void *to, const void __user *from, unsigned long n)
 {
 	unsigned long res = n;
-	unsigned long address_offset;
+	unsigned long address;
 	might_fault();
 	if (likely(access_ok(from, n))) {
 		kasan_check_write(to, n);
 		
 		
-		for (address_offset = 0; address_offset < n; address_offset += PAGE_SIZE) {
+		for (address = (unsigned long) from & PAGE_MASK; address < (unsigned long) from + n; address += PAGE_SIZE) {
 			/* Iterate through all pages and mark them as RO
 			 * Add the pages to the list of pages locked by this process
 			 * Save whether a page is RO */
-			unsigned long addr = (unsigned long) from;
 
 			down_read(&current->mm->mmap_sem);
-			lock_page_from_va(addr + address_offset);
+			lock_page_from_va(address);
 			up_read(&current->mm->mmap_sem);
 		}
 		current->tocttou_syscall = 1;
@@ -228,13 +227,13 @@ static __always_inline void
 copy_from_user_unlock(const void __user *from, unsigned long n)
 {
 	unsigned long res = n;
-	unsigned long address_offset;
+	unsigned long address;
 	might_fault();
 	if (likely(access_ok(from, res))) {
 		if (current->tocttou_syscall) {
-			for (address_offset = 0; address_offset < res; address_offset += PAGE_SIZE) {
+			for (address = (unsigned long) from & PAGE_MASK; address < (unsigned long) from + n; address += PAGE_SIZE) {
 				down_read(&current->mm->mmap_sem);
-				unlock_page_from_va((unsigned long) from + address_offset);
+				unlock_page_from_va(address);
 				up_read(&current->mm->mmap_sem);
 			}
 		}

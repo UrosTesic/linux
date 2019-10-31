@@ -2,6 +2,7 @@
 #include <linux/page-flags.h>
 #include <asm/uaccess.h>
 #include <asm/pgtable.h>
+#include <asm/tlbflush.h>
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
 void lock_page_from_va(unsigned long vaddr)
@@ -12,6 +13,7 @@ void lock_page_from_va(unsigned long vaddr)
 	pmd_t *pmd;
 	pte_t *ptep, pte;
 	struct page *target_page;
+	struct vm_area_struct* vma_iter;
 
 	pgd = pgd_offset(current->mm, vaddr);
 	if (!pgd)
@@ -46,6 +48,13 @@ void lock_page_from_va(unsigned long vaddr)
 	
 	*ptep = pte_wrprotect(pte);
 	pte_unmap(ptep);
+
+	for (vma_iter = current->mm->mmap; vaddr < vma_iter->vm_start; vma_iter = vma_iter->vm_next) {}
+
+	BUG_ON(vma_iter == NULL);
+
+	flush_tlb_page(vma_iter, vaddr); 
+	barrier();
 }
 EXPORT_SYMBOL(lock_page_from_va);
 #endif
@@ -59,6 +68,7 @@ void unlock_page_from_va(unsigned long vaddr)
 	pmd_t *pmd;
 	pte_t *ptep, pte;
 	struct page *target_page;
+	struct vm_area_struct* vma_iter;
 
 	pgd = pgd_offset(current->mm, vaddr);
 	if (!pgd)
@@ -99,7 +109,12 @@ void unlock_page_from_va(unsigned long vaddr)
 
 	pte_unmap(ptep);
 
-	return;
+	for (vma_iter = current->mm->mmap; vaddr < vma_iter->vm_start; vma_iter = vma_iter->vm_next) {}
+
+	BUG_ON(vma_iter == NULL);
+
+	flush_tlb_page(vma_iter, vaddr);
+	barrier();
 }
 EXPORT_SYMBOL(unlock_page_from_va);
 #endif
