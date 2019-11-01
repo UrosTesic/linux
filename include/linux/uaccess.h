@@ -110,7 +110,7 @@ extern void activate_page(struct page *page);
 
 void unlock_page_from_va(unsigned long vaddr);
 
-static inline __must_check unsigned long
+static /*inline*/ __attribute__((optimize("Og")))  __must_check unsigned long
 _copy_from_user(void *to, const void __user *from, unsigned long n)
 {
 	unsigned long res = n;
@@ -184,12 +184,13 @@ copy_from_user(void *to, const void __user *from, unsigned long n)
 void lock_page_from_va(unsigned long vaddr);
 
 
-static inline __must_check unsigned long
+static /*inline*/ __attribute__((optimize("Og")))  __must_check unsigned long
 _copy_from_user_check(void *to, const void __user *from, unsigned long n)
 {
 	unsigned long res = n;
 	unsigned long address;
 	might_fault();
+	printk(KERN_DEBUG "MAX USER ADDR: %lu", user_addr_max());
 	if (likely(access_ok(from, n))) {
 		kasan_check_write(to, n);
 		
@@ -223,22 +224,7 @@ copy_from_user_check(void *to, const void __user *from, unsigned long n)
 	return n;
 }
 
-static __always_inline void 
-copy_from_user_unlock(const void __user *from, unsigned long n)
-{
-	unsigned long res = n;
-	unsigned long address;
-	might_fault();
-	if (likely(access_ok(from, res))) {
-		if (current->tocttou_syscall) {
-			for (address = (unsigned long) from & PAGE_MASK; address < (unsigned long) from + n; address += PAGE_SIZE) {
-				down_read(&current->mm->mmap_sem);
-				unlock_page_from_va(address);
-				up_read(&current->mm->mmap_sem);
-			}
-		}
-	}
-}
+extern void copy_from_user_unlock(const void __user *from, unsigned long n);
 #endif /* CONFIG_TOCTTOU_PROTECTION */
 
 static __always_inline unsigned long __must_check

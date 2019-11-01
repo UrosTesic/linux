@@ -158,13 +158,13 @@ static inline void __mm_zero_struct_page(struct page *page)
 
 	switch (sizeof(struct page)) {
 	case 120:
-		_pp[14] = 0;
+		_pp[14] = 0; /* fallthrough */
 	case 112:
-		_pp[13] = 0;
+		_pp[13] = 0; /* fallthrough */
 	case 104:
-		_pp[12] = 0;
+		_pp[12] = 0; /* fallthrough */
 	case 96:
-		_pp[11] = 0;
+		_pp[11] = 0; /* fallthrough */
 	case 88:
 		_pp[10] = 0; /* fallthrough */
 	case 80:

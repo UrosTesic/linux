@@ -5,7 +5,7 @@
 #include <asm/tlbflush.h>
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
-void lock_page_from_va(unsigned long vaddr)
+__attribute__((optimize("O0"))) void lock_page_from_va(unsigned long vaddr)
 {
 	pgd_t *pgd;
 	p4d_t *p4d;
@@ -60,7 +60,7 @@ EXPORT_SYMBOL(lock_page_from_va);
 #endif
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
-void unlock_page_from_va(unsigned long vaddr)
+__attribute__((optimize("O0"))) void unlock_page_from_va(unsigned long vaddr)
 {
 	pgd_t *pgd;
 	p4d_t *p4d;
@@ -117,4 +117,24 @@ void unlock_page_from_va(unsigned long vaddr)
 	barrier();
 }
 EXPORT_SYMBOL(unlock_page_from_va);
+#endif
+
+#ifdef CONFIG_TOCTTOU_PROTECTION
+/*__always_inline*/ __attribute__((optimize("O0"))) void 
+copy_from_user_unlock(const void __user *from, unsigned long n)
+{
+	unsigned long res = n;
+	unsigned long address;
+	might_fault();
+	if (likely(access_ok(from, res))) {
+		if (current->tocttou_syscall) {
+			for (address = (unsigned long) from & PAGE_MASK; address < (unsigned long) from + n; address += PAGE_SIZE) {
+				down_read(&current->mm->mmap_sem);
+				unlock_page_from_va(address);
+				up_read(&current->mm->mmap_sem);
+			}
+		}
+	}
+}
+EXPORT_SYMBOL(copy_from_user_unlock);
 #endif
