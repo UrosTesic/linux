@@ -7,6 +7,7 @@
 #ifdef CONFIG_TOCTTOU_PROTECTION
 __attribute__((optimize("O0"))) void lock_page_from_va(unsigned long vaddr)
 {
+	printk("%lx\n", vaddr);
 	pgd_t *pgd;
 	p4d_t *p4d;
 	pud_t *pud;
@@ -43,6 +44,7 @@ __attribute__((optimize("O0"))) void lock_page_from_va(unsigned long vaddr)
 	if (atomic_inc_return(&target_page->tocttou_refs) == 1) {
 		target_page->old_write_perm = pte_write(pte);
 		SetPageTocttou(target_page);
+		//spin_lock(&target_page->tocttou_spinner);
 		reinit_completion(&target_page->tocttou_protection);
 	}
 	
@@ -53,6 +55,7 @@ __attribute__((optimize("O0"))) void lock_page_from_va(unsigned long vaddr)
 
 	BUG_ON(vma_iter == NULL);
 
+	//flush_tlb_all();
 	flush_tlb_page(vma_iter, vaddr); 
 	barrier();
 }
@@ -62,6 +65,7 @@ EXPORT_SYMBOL(lock_page_from_va);
 #ifdef CONFIG_TOCTTOU_PROTECTION
 __attribute__((optimize("O0"))) void unlock_page_from_va(unsigned long vaddr)
 {
+	printk("%lx\n", vaddr);
 	pgd_t *pgd;
 	p4d_t *p4d;
 	pud_t *pud;
@@ -99,12 +103,14 @@ __attribute__((optimize("O0"))) void unlock_page_from_va(unsigned long vaddr)
 	if (atomic_dec_and_test(&target_page->tocttou_refs))
 	{	
 		ClearPageTocttou(target_page);
+		atomic_dec(&target_page->tocttou_refs);
 		if (target_page->old_write_perm)
 			*ptep = pte_mkwrite(pte);
 		else
 			*ptep = pte_wrprotect(pte);
-
-		complete_all(&target_page->tocttou_protection);
+		//spin_unlock(&target_page->tocttou_spinner);
+		complete(&target_page->tocttou_protection);
+		printk("Unlocking the page and signaling!\n");
 	}
 
 	pte_unmap(ptep);
@@ -112,7 +118,7 @@ __attribute__((optimize("O0"))) void unlock_page_from_va(unsigned long vaddr)
 	for (vma_iter = current->mm->mmap; vaddr < vma_iter->vm_start; vma_iter = vma_iter->vm_next) {}
 
 	BUG_ON(vma_iter == NULL);
-
+	//flush_tlb_all();
 	flush_tlb_page(vma_iter, vaddr);
 	barrier();
 }
@@ -126,9 +132,14 @@ copy_from_user_unlock(const void __user *from, unsigned long n)
 	unsigned long res = n;
 	unsigned long address;
 	might_fault();
+	printk("trace1\n");
 	if (likely(access_ok(from, res))) {
-		if (current->tocttou_syscall) {
+		printk("trace2\n");
+		if (1) {
+			printk("trace3\n");
 			for (address = (unsigned long) from & PAGE_MASK; address < (unsigned long) from + n; address += PAGE_SIZE) {
+				printk("trace4\n");
+				printk("%lx", address);
 				down_read(&current->mm->mmap_sem);
 				unlock_page_from_va(address);
 				up_read(&current->mm->mmap_sem);

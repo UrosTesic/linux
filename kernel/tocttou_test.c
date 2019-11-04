@@ -21,8 +21,30 @@ __attribute__((optimize("O0"))) SYSCALL_DEFINE1(tocttou_test, long __user *, arg
     else
         return 1;
 }
+
+__attribute__((optimize("O0"))) SYSCALL_DEFINE1(tocttou_lock, long __user *, arg)
+{
+    long check_copy;
+    return copy_from_user_check(&check_copy, arg, sizeof(long));
+}
+
+__attribute__((optimize("O0"))) SYSCALL_DEFINE1(tocttou_unlock, long __user *, arg)
+{
+    copy_from_user_unlock(arg, sizeof(long));
+    return 0;
+}
 #else
 __attribute__((optimize("O0"))) SYSCALL_DEFINE1(tocttou_test, long __user *, arg)
+{
+    return 2;
+}
+
+__attribute__((optimize("O0"))) SYSCALL_DEFINE1(tocttou_lock, long __user *, arg)
+{
+    return 2;
+}
+
+__attribute__((optimize("O0"))) SYSCALL_DEFINE1(tocttou_unlock, long __user *, arg)
 {
     return 2;
 }
