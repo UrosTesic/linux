@@ -113,24 +113,18 @@ void unlock_page_from_va(unsigned long vaddr);
 static inline __must_check void
 _mark_user_pages_read_only(const void __user *from, unsigned long n);
 
-static /*inline*/ __attribute__((optimize("Og")))  __must_check unsigned long
+static inline __must_check unsigned long
 _copy_from_user(void *to, const void __user *from, unsigned long n)
 {
 	unsigned long res = n;
-	//unsigned long address;
+
 	might_fault();
-	//_mark_user_pages_read_only(from, n);
+
 	
 	if (likely(access_ok(from, n))) {
 		kasan_check_write(to, n);
 		res = raw_copy_from_user(to, from, n);
-		/*if (current->tocttou_syscall) {
-			for (address = (unsigned long) from & PAGE_MASK; address < (unsigned long) from + n; address += PAGE_SIZE) {
-				down_read(&current->mm->mmap_sem);
-				unlock_page_from_va(address);
-				up_read(&current->mm->mmap_sem);
-			}
-		}*/
+
 	}
 	if (unlikely(res))
 		memset(to + (n - res), 0, res);
@@ -175,7 +169,7 @@ _copy_to_user(void __user *, const void *, unsigned long);
 
 
 static __always_inline unsigned long __must_check
-copy_from_user(void *to, const void __user *from, unsigned long n)
+copy_from_user_check(void *to, const void __user *from, unsigned long n)
 {
 	if (likely(check_copy_size(to, n, false)))
 		n = _copy_from_user(to, from, n);
@@ -189,7 +183,7 @@ copy_from_user(void *to, const void __user *from, unsigned long n)
 void lock_page_from_va(unsigned long vaddr);
 
 
-static /*inline*/ __attribute__((optimize("Og")))  __must_check unsigned long
+static inline __must_check unsigned long
 _copy_from_user_check(void *to, const void __user *from, unsigned long n)
 {
 	unsigned long res = n;
@@ -205,7 +199,7 @@ _copy_from_user_check(void *to, const void __user *from, unsigned long n)
 	return res;
 }
 
-static inline __must_check  __attribute__((optimize("Og"))) void
+static inline __must_check  void
 _mark_user_pages_read_only(const void __user *from, unsigned long n)
 {
 	unsigned long address;
@@ -231,7 +225,7 @@ _mark_user_pages_read_only(const void __user *from, unsigned long n)
 //#endif /* INLINE_COPY_FROM_USER */
 
 static __always_inline unsigned long __must_check
-copy_from_user_check(void *to, const void __user *from, unsigned long n)
+copy_from_user(void *to, const void __user *from, unsigned long n)
 {
 	if (likely(check_copy_size(to, n, false)))
 		n = _copy_from_user_check(to, from, n);

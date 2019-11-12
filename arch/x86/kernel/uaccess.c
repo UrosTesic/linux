@@ -23,8 +23,6 @@ void lock_page_from_va(unsigned long vaddr)
 	struct tocttou_marked_node *iter;
 	struct list_head *temp;
 
-	printk(KERN_DEBUG "Lock: %lx\n", vaddr);
-
 	pgd = pgd_offset(current->mm, vaddr);
 	if (!pgd)
 		return;
@@ -64,7 +62,6 @@ void lock_page_from_va(unsigned long vaddr)
 
 	new_node->marked_page = target_page;
 	new_node->vaddr = vaddr;
-	printk(KERN_DEBUG "Lock2: %lx\n", new_node->vaddr);
 
 	activate_page(target_page);
 
@@ -86,15 +83,10 @@ void lock_page_from_va(unsigned long vaddr)
 
 	for (vma_iter = current->mm->mmap; vaddr < vma_iter->vm_start; vma_iter = vma_iter->vm_next) {}
 
-	BUG_ON(vma_iter == NULL);
+	BUG_ON(!vma_iter);
 
-	//flush_tlb_all();
 	flush_tlb_page(vma_iter, vaddr); 
 	barrier();
-
-	list_for_each_entry(iter, &current->marked_pages_list, other_nodes) {
-		printk(KERN_DEBUG "Iter: %lx\n", iter->vaddr);
-	}
 }
 EXPORT_SYMBOL(lock_page_from_va);
 #endif
@@ -109,8 +101,6 @@ void unlock_page_from_va(unsigned long vaddr)
 	pte_t *ptep, pte;
 	struct page *target_page;
 	struct vm_area_struct* vma_iter;
-
-	printk(KERN_DEBUG "Unlock: %lx\n", vaddr);
 
 	pgd = pgd_offset(current->mm, vaddr);
 	if (!pgd)
