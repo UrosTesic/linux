@@ -224,8 +224,7 @@ struct page {
 #ifdef CONFIG_TOCTTOU_PROTECTION
 	bool old_write_perm;
 	struct completion tocttou_protection;
-	atomic_t tocttou_refs;
-	// spin_lock tocttou_spinner;
+	unsigned tocttou_refs;
 #endif
 } _struct_page_alignment;
 

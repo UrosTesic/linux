@@ -276,6 +276,7 @@ __visible inline void syscall_return_slowpath(struct pt_regs *regs)
 }
 
 #ifdef CONFIG_X86_64
+void unlock_marked_pages(void);
 
 __visible void do_syscall_64(unsigned long nr, struct pt_regs *regs)
 {
@@ -304,7 +305,32 @@ __visible void do_syscall_64(unsigned long nr, struct pt_regs *regs)
 #endif
 	}
 
+#ifdef CONFIG_TOCTTOU_PROTECTION
+	unlock_marked_pages();
+#endif
 	syscall_return_slowpath(regs);
+}
+#endif
+
+#ifdef CONFIG_TOCTTOU_PROTECTION
+void unlock_marked_pages()
+{
+	struct tocttou_marked_node *iter;
+	struct tocttou_marked_node *next;
+	if (current->tocttou_syscall) {
+		list_for_each_entry(iter, &current->marked_pages_list, other_nodes) {
+			printk(KERN_DEBUG "Iter: %lx\n", iter->vaddr);
+		}
+
+		list_for_each_entry(iter, &current->marked_pages_list, other_nodes) {
+			unlock_page_from_va(iter->vaddr);
+		}
+
+		list_for_each_entry_safe(iter, next, &current->marked_pages_list, other_nodes) {
+        	list_del(&iter->other_nodes);
+        	kfree(iter);
+    	}		
+	}
 }
 #endif
 

@@ -181,6 +181,10 @@ struct task_struct init_task
 #ifdef CONFIG_SECURITY
 	.security	= NULL,
 #endif
+#ifdef CONFIG_TOCTTOU_PROTECTION
+	.tocttou_syscall = 0,
+	.marked_pages_list = LIST_HEAD_INIT(init_task.marked_pages_list),
+#endif
 };
 EXPORT_SYMBOL(init_task);
 

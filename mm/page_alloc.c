@@ -6743,6 +6743,7 @@ void __ref free_area_init_core_hotplug(int nid)
 }
 #endif
 
+extern struct mutex tocttou_global_mutex;
 /*
  * Set up the zone data structures:
  *   - mark all pages reserved
@@ -6759,6 +6760,7 @@ static void __init free_area_init_core(struct pglist_data *pgdat)
 
 	pgdat_init_internals(pgdat);
 	pgdat->per_cpu_nodestats = &boot_nodestats;
+	mutex_init(&tocttou_global_mutex);
 
 	for (j = 0; j < MAX_NR_ZONES; j++) {
 		struct zone *zone = pgdat->node_zones + j;

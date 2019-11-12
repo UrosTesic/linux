@@ -110,22 +110,27 @@ extern void activate_page(struct page *page);
 
 void unlock_page_from_va(unsigned long vaddr);
 
+static inline __must_check void
+_mark_user_pages_read_only(const void __user *from, unsigned long n);
+
 static /*inline*/ __attribute__((optimize("Og")))  __must_check unsigned long
 _copy_from_user(void *to, const void __user *from, unsigned long n)
 {
 	unsigned long res = n;
-	unsigned long address;
+	//unsigned long address;
 	might_fault();
+	//_mark_user_pages_read_only(from, n);
+	
 	if (likely(access_ok(from, n))) {
 		kasan_check_write(to, n);
 		res = raw_copy_from_user(to, from, n);
-		if (current->tocttou_syscall) {
+		/*if (current->tocttou_syscall) {
 			for (address = (unsigned long) from & PAGE_MASK; address < (unsigned long) from + n; address += PAGE_SIZE) {
 				down_read(&current->mm->mmap_sem);
 				unlock_page_from_va(address);
 				up_read(&current->mm->mmap_sem);
 			}
-		}
+		}*/
 	}
 	if (unlikely(res))
 		memset(to + (n - res), 0, res);
@@ -188,12 +193,24 @@ static /*inline*/ __attribute__((optimize("Og")))  __must_check unsigned long
 _copy_from_user_check(void *to, const void __user *from, unsigned long n)
 {
 	unsigned long res = n;
-	unsigned long address;
 	might_fault();
-	printk(KERN_DEBUG "MAX USER ADDR: %lu", user_addr_max());
 	if (likely(access_ok(from, n))) {
 		kasan_check_write(to, n);
 		
+		_mark_user_pages_read_only(from, n);
+		res = raw_copy_from_user(to, from, n);
+	}
+	if (unlikely(res))
+		memset(to + (n - res), 0, res);
+	return res;
+}
+
+static inline __must_check  __attribute__((optimize("Og"))) void
+_mark_user_pages_read_only(const void __user *from, unsigned long n)
+{
+	unsigned long address;
+	might_fault();
+	if (likely(access_ok(from, n))) {
 		
 		for (address = (unsigned long) from & PAGE_MASK; address < (unsigned long) from + n; address += PAGE_SIZE) {
 			/* Iterate through all pages and mark them as RO
@@ -205,11 +222,8 @@ _copy_from_user_check(void *to, const void __user *from, unsigned long n)
 			up_read(&current->mm->mmap_sem);
 		}
 		current->tocttou_syscall = 1;
-		res = raw_copy_from_user(to, from, n);
 	}
-	if (unlikely(res))
-		memset(to + (n - res), 0, res);
-	return res;
+
 }
 //#else
 //extern __must_check unsigned long

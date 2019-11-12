@@ -599,6 +599,13 @@ struct uclamp_se {
 };
 #endif /* CONFIG_UCLAMP_TASK */
 
+struct tocttou_marked_node
+{
+	struct page * marked_page;
+	unsigned long vaddr;
+	struct list_head other_nodes;
+};
+
 union rcu_special {
 	struct {
 		u8			blocked;
@@ -1267,6 +1274,7 @@ struct task_struct {
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
 	unsigned tocttou_syscall;
+	struct list_head marked_pages_list;
 #endif
 
 	/*
