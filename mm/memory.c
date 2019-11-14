@@ -3787,6 +3787,7 @@ static vm_fault_t wp_huge_pud(struct vm_fault *vmf, pud_t orig_pud)
 	return VM_FAULT_FALLBACK;
 }
 
+extern struct mutex tocttou_global_mutex;
 /*
  * These routines also need to handle stuff like marking pages dirty
  * and/or accessed for architectures that don't do it in hardware (most
@@ -3851,13 +3852,33 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 
 	if (!pte_present(vmf->orig_pte))
 		return do_swap_page(vmf);
-	// TO DO: Kernel panic here! accessed_page is 0.
-	//
+
 	struct page *accessed_page = pte_page(vmf->orig_pte);
-	if (PageTocttou(accessed_page)) {
-		up_read(&current->mm->mmap_sem);
-		wait_for_completion(&accessed_page->tocttou_protection);
-		down_read(&current->mm->mmap_sem);
+	if (accessed_page->markings) {
+		volatile struct tocttou_page_data *markings = accessed_page->markings;
+		pte_unmap(vmf->orig_pte);
+		mutex_lock(&tocttou_global_mutex);
+
+		if (!accessed_page->markings) {
+			mutex_unlock(&tocttou_global_mutex);
+		} else {
+			markings->guests++;
+
+			up_read(&current->mm->mmap_sem);
+			mutex_unlock(&tocttou_global_mutex);
+
+			wait_for_completion(&markings->unmarking_completed);
+
+			down_read(&current->mm->mmap_sem);
+			mutex_lock(&tocttou_global_mutex);
+
+			markings->guests--;
+			if (!markings->guests) {
+				kfree((void*) markings);
+			}
+
+			mutex_unlock(&tocttou_global_mutex);
+		}
 		return VM_FAULT_MAJOR;
 	}
 	

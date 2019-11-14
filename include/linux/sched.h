@@ -602,7 +602,6 @@ struct uclamp_se {
 struct tocttou_marked_node
 {
 	struct page * marked_page;
-	unsigned long vaddr;
 	struct list_head other_nodes;
 };
 

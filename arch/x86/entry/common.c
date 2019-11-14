@@ -319,7 +319,7 @@ void unlock_marked_pages()
 	struct tocttou_marked_node *next;
 	if (current->tocttou_syscall) {
 		list_for_each_entry(iter, &current->marked_pages_list, other_nodes) {
-			unlock_page_from_va(iter->vaddr);
+			unlock_pages_from_page_frame(iter->marked_page);
 		}
 
 		list_for_each_entry_safe(iter, next, &current->marked_pages_list, other_nodes) {

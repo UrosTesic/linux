@@ -108,7 +108,7 @@ __copy_to_user(void __user *to, const void *from, unsigned long n)
 #ifdef CONFIG_TOCTTOU_PROTECTION
 extern void activate_page(struct page *page);
 
-void unlock_page_from_va(unsigned long vaddr);
+void unlock_pages_from_page_frame(struct page *page);
 
 static inline __must_check void
 _mark_user_pages_read_only(const void __user *from, unsigned long n);

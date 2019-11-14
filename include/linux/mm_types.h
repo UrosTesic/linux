@@ -68,9 +68,9 @@ struct mem_cgroup;
 
 struct read_only_refs_node
 {
-	struct mm_struct *memory_space;
+	struct vm_area_struct *vma;
 	struct list_head nodes;
-}
+};
 
 struct tocttou_page_data
 {
@@ -78,9 +78,9 @@ struct tocttou_page_data
 	unsigned guests;
 	struct completion unmarking_completed;
 	struct list_head read_only_list;
-}
+};
 
-inline void INIT_TOCTTOU_PAGE_DATA(struct tocttou_page_data *data)
+static inline void INIT_TOCTTOU_PAGE_DATA(struct tocttou_page_data *data)
 {
 	data->owners = 0;
 	data->guests = 0;
