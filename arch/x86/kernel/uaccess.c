@@ -10,6 +10,24 @@
 struct mutex tocttou_global_mutex;
 EXPORT_SYMBOL(tocttou_global_mutex);
 
+static bool try_to_mark_one(struct page *page, struct vm_area_struct *vma,
+		     unsigned long address, void *arg)
+{
+	struct mm_struct *mm = vma->vm_mm;
+	struct page_vma_mapped_walk pvmw = {
+		.page = page,
+		.vma = vma,
+		.address = address,
+	};
+	pte_t pteval;
+
+	while (page_vma_mapped_walk(&pvmw)) {
+		pte_t * ppte = pvmw->pte;
+		if (!pte_write(*ppte)) {
+			
+		}
+	}
+}
 void lock_page_from_va(unsigned long vaddr)
 {
 	pgd_t *pgd;
@@ -22,6 +40,13 @@ void lock_page_from_va(unsigned long vaddr)
 	struct tocttou_marked_node *new_node;
 	struct tocttou_marked_node *iter;
 	struct list_head *temp;
+	struct tocttou_page_data *markings;
+	struct rmap_walk_control rwc = {
+		.rmap_one = try_to_unmap_one,
+		.arg = (void *)TTU_MUNLOCK,
+		.done = page_not_mapped,
+		.anon_lock = page_lock_anon_vma_read,
+	};
 
 	pgd = pgd_offset(current->mm, vaddr);
 	if (!pgd)
@@ -67,15 +92,18 @@ void lock_page_from_va(unsigned long vaddr)
 
 	mutex_lock(&tocttou_global_mutex);
 	
-	target_page->tocttou_refs++;
+	if (!target_page->markings) {
+		target_page->markings = kmalloc(sizeof(*target_page->markings), GFP_KERNEL);
+		INIT_TOCTTOU_PAGE_DATA(&target_page->markings);
+		SetPageTocttou(target_page);
+
+		// Iterate through other pages and mark them
+	}
+	markings = target_page->markings;
+	markings->owners++;
 
 	list_add(&new_node->other_nodes, &current->marked_pages_list);
 
-	if (target_page->tocttou_refs == 1) {
-		target_page->old_write_perm = pte_write(pte);
-		SetPageTocttou(target_page);
-		reinit_completion(&target_page->tocttou_protection);
-	}
 	mutex_unlock(&tocttou_global_mutex);
 	
 	*ptep = pte_wrprotect(pte);

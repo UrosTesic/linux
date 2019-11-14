@@ -66,6 +66,28 @@ struct mem_cgroup;
 #define _struct_page_alignment
 #endif
 
+struct read_only_refs_node
+{
+	struct mm_struct *memory_space;
+	struct list_head nodes;
+}
+
+struct tocttou_page_data
+{
+	unsigned owners;
+	unsigned guests;
+	struct completion unmarking_completed;
+	struct list_head read_only_list;
+}
+
+inline void INIT_TOCTTOU_PAGE_DATA(struct tocttou_page_data *data)
+{
+	data->owners = 0;
+	data->guests = 0;
+	init_completion(&data->unmarking_completed);
+	INIT_LIST_HEAD(&data->read_only_list);
+}
+
 struct page {
 	unsigned long flags;		/* Atomic flags, some possibly
 					 * updated asynchronously */
@@ -222,9 +244,7 @@ struct page {
 #endif
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
-	bool old_write_perm;
-	struct completion tocttou_protection;
-	unsigned tocttou_refs;
+	struct tocttou_page_data *markings;
 #endif
 } _struct_page_alignment;
 
