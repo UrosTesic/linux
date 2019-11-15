@@ -168,14 +168,6 @@ _copy_to_user(void __user *, const void *, unsigned long);
 #endif
 
 
-static __always_inline unsigned long __must_check
-copy_from_user_check(void *to, const void __user *from, unsigned long n)
-{
-	if (likely(check_copy_size(to, n, false)))
-		n = _copy_from_user(to, from, n);
-	return n;
-}
-
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
 
@@ -197,6 +189,14 @@ _copy_from_user_check(void *to, const void __user *from, unsigned long n)
 	if (unlikely(res))
 		memset(to + (n - res), 0, res);
 	return res;
+}
+
+static __always_inline unsigned long __must_check
+copy_from_user_check(void *to, const void __user *from, unsigned long n)
+{
+	if (likely(check_copy_size(to, n, false)))
+		n = _copy_from_user_check(to, from, n);
+	return n;
 }
 
 static inline __must_check  void
@@ -224,16 +224,16 @@ _mark_user_pages_read_only(const void __user *from, unsigned long n)
 //_copy_from_user_check(void *, const void __user *, unsigned long);
 //#endif /* INLINE_COPY_FROM_USER */
 
+extern void copy_from_user_unlock(const void __user *from, unsigned long n);
+#endif /* CONFIG_TOCTTOU_PROTECTION */
+
 static __always_inline unsigned long __must_check
 copy_from_user(void *to, const void __user *from, unsigned long n)
 {
 	if (likely(check_copy_size(to, n, false)))
-		n = _copy_from_user_check(to, from, n);
+		n = _copy_from_user(to, from, n);
 	return n;
 }
-
-extern void copy_from_user_unlock(const void __user *from, unsigned long n);
-#endif /* CONFIG_TOCTTOU_PROTECTION */
 
 static __always_inline unsigned long __must_check
 copy_to_user(void __user *to, const void *from, unsigned long n)

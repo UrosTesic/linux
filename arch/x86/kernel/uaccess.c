@@ -14,13 +14,11 @@ EXPORT_SYMBOL(tocttou_global_mutex);
 static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
 		     unsigned long address, void *arg)
 {
-	struct mm_struct *mm = vma->vm_mm;
 	struct page_vma_mapped_walk pvmw = {
 		.page = page,
 		.vma = vma,
 		.address = address,
 	};
-	pte_t pteval;
 	unsigned *total;
 
 	total = arg;
@@ -33,6 +31,7 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
 		// For a writable page, just mark as RO
 		//
 		if (pte_write(*ppte)) {
+			printk(KERN_DEBUG "Locking W page\n");
 			*ppte = pte_wrprotect(*ppte);
 
 		// Keep track of RO pages
@@ -42,6 +41,7 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
 			new_node = kmalloc(sizeof(*new_node), GFP_KERNEL);
 			new_node->vma = vma;
 			list_add(&new_node->nodes, &page->markings->read_only_list);
+			printk(KERN_DEBUG "Locking RO page\n");
 		}
 
 		// Flush the TLB for every page
@@ -56,14 +56,12 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
 static bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
 		     unsigned long address, void *arg)
 {
-	struct mm_struct *mm = vma->vm_mm;
 	struct tocttou_page_data *markings = page->markings;
 	struct page_vma_mapped_walk pvmw = {
 		.page = page,
 		.vma = vma,
 		.address = address,
 	};
-	pte_t pteval;
 	unsigned *total;
 	total = arg;
 
@@ -86,6 +84,9 @@ static bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
 
 		if (!is_read_only) {
 			set_pte(ppte, pte_mkwrite(*ppte));
+			printk(KERN_DEBUG "Unocking W page\n");
+		} else {
+			printk(KERN_DEBUG "Unlocking RO page\n");
 		}
 		// Flush the TLB for every page
 		//
@@ -104,7 +105,6 @@ void lock_page_from_va(unsigned long vaddr)
 	pmd_t *pmd;
 	pte_t *ptep, pte;
 	struct page *target_page;
-	struct vm_area_struct *vma_iter;
 	struct tocttou_marked_node *new_node;
 	struct tocttou_marked_node *iter;
 	struct list_head *temp;
@@ -196,8 +196,6 @@ EXPORT_SYMBOL(lock_page_from_va);
 #ifdef CONFIG_TOCTTOU_PROTECTION
 void unlock_pages_from_page_frame(struct page* target_page)
 {
-	struct vm_area_struct* vma_iter;
-
 	struct tocttou_page_data *markings;
 	unsigned total = 0;
 
@@ -225,6 +223,7 @@ void unlock_pages_from_page_frame(struct page* target_page)
 			list_del(&iter->nodes);
 			kfree(iter);
 		}
+		target_page->markings = NULL;
 
 		complete_all(&markings->unmarking_completed);
 		ClearPageTocttou(target_page);
