@@ -206,9 +206,10 @@ void unlock_pages_from_page_frame(struct page* target_page)
 	};
 	
 	mutex_lock(&tocttou_global_mutex);
-	BUG_ON(!target_page->markings);
+	
 
-	markings = target_page->markings;
+	markings = READ_ONCE(target_page->markings);
+	BUG_ON(!target_page->markings);
 	
 	markings->owners--;
 	if (!markings->owners)

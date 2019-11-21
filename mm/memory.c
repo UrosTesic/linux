@@ -754,9 +754,32 @@ copy_one_pte(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 	 * If it's a COW mapping, write protect it both
 	 * in the parent and the child
 	 */
-	if (is_cow_mapping(vm_flags) && pte_write(pte)) {
-		ptep_set_wrprotect(src_mm, addr, src_pte);
-		pte = pte_wrprotect(pte);
+	if (is_cow_mapping(vm_flags))) {
+		if (pte_write(pte)) {
+			ptep_set_wrprotect(src_mm, addr, src_pte);
+			pte = pte_wrprotect(pte);
+		} else {
+			struct page *page_frame;
+			tocttou_page_data *markings;
+
+			page_frame = pte_page(pte);
+			markings = READ_ONCE(page_frame->markings);
+
+			if (markings) {
+				mutex_lock(&tocttou_global_mutex);
+				markings = READ_ONCE(page_frame->markings);
+
+				if (!markings) {
+					mutex_unlock(&tocttou_global_mutex);
+				} else {
+					struct read_only_refs_node *iter;
+					list_for_each_entry(iter, &markings->read_only_list, nodes) {
+						
+					}
+				}
+			}
+			
+		}
 	}
 
 	/*
@@ -3847,13 +3870,13 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 		if (vma_is_anonymous(vmf->vma))
 			return do_anonymous_page(vmf);
 		else
-			return do_fault(vmf);
+			return do_fault(vmf); 
 	}
 
 	if (!pte_present(vmf->orig_pte))
 		return do_swap_page(vmf);
 
-	struct page *accessed_page = pte_page(vmf->orig_pte);
+	volatile struct page *accessed_page = pte_page(vmf->orig_pte);
 	if (accessed_page->markings) {
 		volatile struct tocttou_page_data *markings = accessed_page->markings;
 		pte_unmap(vmf->orig_pte);
