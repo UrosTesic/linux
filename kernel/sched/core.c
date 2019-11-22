@@ -3298,6 +3298,8 @@ static inline void balance_callback(struct rq *rq)
 
 #endif
 
+void unlock_marked_pages(void);
+
 /**
  * schedule_tail - first thing a freshly forked thread must call.
  * @prev: the thread we just switched away from.
@@ -3324,6 +3326,7 @@ asmlinkage __visible void schedule_tail(struct task_struct *prev)
 		put_user(task_pid_vnr(current), current->set_child_tid);
 
 	calculate_sigpending();
+	unlock_marked_pages();
 }
 
 /*

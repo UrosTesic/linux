@@ -668,6 +668,7 @@ out:
 }
 #endif
 
+extern struct mutex tocttou_global_mutex;
 /*
  * copy one vm_area from one task to the other. Assumes the page tables
  * already present in the new task to be cleared in the whole range
@@ -754,13 +755,13 @@ copy_one_pte(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 	 * If it's a COW mapping, write protect it both
 	 * in the parent and the child
 	 */
-	if (is_cow_mapping(vm_flags))) {
+	if (is_cow_mapping(vm_flags)) {
 		if (pte_write(pte)) {
 			ptep_set_wrprotect(src_mm, addr, src_pte);
 			pte = pte_wrprotect(pte);
 		} else {
 			struct page *page_frame;
-			tocttou_page_data *markings;
+			struct tocttou_page_data *markings;
 
 			page_frame = pte_page(pte);
 			markings = READ_ONCE(page_frame->markings);
@@ -773,9 +774,33 @@ copy_one_pte(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 					mutex_unlock(&tocttou_global_mutex);
 				} else {
 					struct read_only_refs_node *iter;
+					struct vm_area_struct *vma_iter;
+					struct read_only_refs_node *new_node;
+
 					list_for_each_entry(iter, &markings->read_only_list, nodes) {
-						
+						if (iter->vma == vma) {
+							break;
+						}
 					}
+
+					if (!iter->vma) {
+						new_node = kmalloc(sizeof(*new_node), GFP_KERNEL);
+						new_node->vma = vma;
+						list_add(&new_node->nodes, &markings->read_only_list);
+					}
+
+					vma_iter = dst_mm->mmap;
+					while (vma_iter && vma_iter->vm_end <= addr) {
+						vma_iter = vma_iter->vm_next;
+					}
+
+					BUG_ON(!vma_iter);
+					BUG_ON(addr < vma_iter->vm_start);
+
+					new_node = kmalloc(sizeof(*new_node), GFP_KERNEL);
+					new_node->vma = vma_iter;
+					list_add(&new_node->nodes, &markings->read_only_list);
+					mutex_unlock(&tocttou_global_mutex);
 				}
 			}
 			
@@ -3829,6 +3854,7 @@ extern struct mutex tocttou_global_mutex;
 static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 {
 	pte_t entry;
+	struct page *accessed_page;
 
 	if (unlikely(pmd_none(*vmf->pmd))) {
 		/*
@@ -3876,11 +3902,14 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 	if (!pte_present(vmf->orig_pte))
 		return do_swap_page(vmf);
 
-	volatile struct page *accessed_page = pte_page(vmf->orig_pte);
+	accessed_page = pte_page(vmf->orig_pte);
+
 	if (accessed_page->markings) {
-		volatile struct tocttou_page_data *markings = accessed_page->markings;
+		struct tocttou_page_data *markings;
 		pte_unmap(vmf->orig_pte);
 		mutex_lock(&tocttou_global_mutex);
+
+		markings = READ_ONCE(accessed_page->markings);
 
 		if (!accessed_page->markings) {
 			mutex_unlock(&tocttou_global_mutex);
