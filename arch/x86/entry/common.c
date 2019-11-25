@@ -318,16 +318,13 @@ void unlock_marked_pages()
 	struct tocttou_marked_node *iter;
 	struct tocttou_marked_node *next;
 
-	trace_printk(KERN_DEBUG "Check0\n");
 
 	if (current->tocttou_syscall) {
 		list_for_each_entry(iter, &current->marked_pages_list, other_nodes) {
-			trace_printk(KERN_DEBUG "Check1\n");
 			unlock_pages_from_page_frame(iter->marked_page);
 		}
 
 		list_for_each_entry_safe(iter, next, &current->marked_pages_list, other_nodes) {
-			trace_printk(KERN_DEBUG "Check2\n");
         	list_del(&iter->other_nodes);
         	kfree(iter);
     	}		

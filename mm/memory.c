@@ -759,7 +759,7 @@ copy_one_pte(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 		if (pte_write(pte)) {
 			ptep_set_wrprotect(src_mm, addr, src_pte);
 			pte = pte_wrprotect(pte);
-		} else {
+		} else {/*
 			struct page *page_frame;
 			struct tocttou_page_data *markings;
 
@@ -804,7 +804,7 @@ copy_one_pte(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 				}
 			}
 			
-		}
+		*/}
 	}
 
 	/*

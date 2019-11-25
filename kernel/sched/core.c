@@ -3326,7 +3326,6 @@ asmlinkage __visible void schedule_tail(struct task_struct *prev)
 		put_user(task_pid_vnr(current), current->set_child_tid);
 
 	calculate_sigpending();
-	unlock_marked_pages();
 }
 
 /*

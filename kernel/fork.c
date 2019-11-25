@@ -2242,22 +2242,18 @@ static __latent_entropy struct task_struct *copy_process(
 	 */
 	copy_seccomp(p);
 
-	retval = copy_tocttou(p);
-	if (retval)
-		goto bad_fork_cancel_cgroup;
-
 	rseq_fork(p, clone_flags);
 
 	/* Don't start children in a dying pid namespace */
 	if (unlikely(!(ns_of_pid(pid)->pid_allocated & PIDNS_ADDING))) {
 		retval = -ENOMEM;
-		goto bad_fork_cleanup_tocttou;
+		goto bad_fork_cancel_cgroup;
 	}
 
 	/* Let kill terminate clone/fork in the middle */
 	if (fatal_signal_pending(current)) {
 		retval = -EINTR;
-		goto bad_fork_cleanup_tocttou;
+		goto bad_fork_cancel_cgroup;
 	}
 
 	/* past the last point of failure */
