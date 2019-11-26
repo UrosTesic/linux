@@ -2239,8 +2239,6 @@ static __latent_entropy struct task_struct *copy_process(
 	uprobe_copy_process(p, clone_flags);
 
 	return p;
-bad_fork_cleanup_tocttou:
-	cleanup_tocttou(p);
 bad_fork_cancel_cgroup:
 	spin_unlock(&current->sighand->siglock);
 	write_unlock_irq(&tasklist_lock);

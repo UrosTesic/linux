@@ -759,14 +759,17 @@ copy_one_pte(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 		if (pte_write(pte)) {
 			ptep_set_wrprotect(src_mm, addr, src_pte);
 			pte = pte_wrprotect(pte);
-		} else {/*
+		} else {
 			struct page *page_frame;
 			struct tocttou_page_data *markings;
+			unsigned entry_num = 0;
+			unsigned found_vma = 0;
 
 			page_frame = pte_page(pte);
 			markings = READ_ONCE(page_frame->markings);
 
 			if (markings) {
+				printk(KERN_DEBUG "Copying a page with markings!\n");
 				mutex_lock(&tocttou_global_mutex);
 				markings = READ_ONCE(page_frame->markings);
 
@@ -777,18 +780,24 @@ copy_one_pte(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 					struct vm_area_struct *vma_iter;
 					struct read_only_refs_node *new_node;
 
+					printk(KERN_DEBUG "Looking for a vma in markings!\n");
+
 					list_for_each_entry(iter, &markings->read_only_list, nodes) {
 						if (iter->vma == vma) {
+							found_vma = 1;
 							break;
 						}
 					}
 
-					if (!iter->vma) {
+					if (!found_vma) {
+						printk(KERN_DEBUG "Allocating a node! It is now RO\n");
 						new_node = kmalloc(sizeof(*new_node), GFP_KERNEL);
 						new_node->vma = vma;
 						list_add(&new_node->nodes, &markings->read_only_list);
 					}
 
+					printk(KERN_DEBUG "%p\n", iter->vma);
+					printk(KERN_DEBUG "Add a VMA for the new process. It is also RO\n");
 					vma_iter = dst_mm->mmap;
 					while (vma_iter && vma_iter->vm_end <= addr) {
 						vma_iter = vma_iter->vm_next;
@@ -796,15 +805,23 @@ copy_one_pte(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 
 					BUG_ON(!vma_iter);
 					BUG_ON(addr < vma_iter->vm_start);
+					
+					printk(KERN_DEBUG "%p\n", vma_iter);
 
+					printk(KERN_DEBUG "Allocate a new node\n");
 					new_node = kmalloc(sizeof(*new_node), GFP_KERNEL);
 					new_node->vma = vma_iter;
 					list_add(&new_node->nodes, &markings->read_only_list);
+
+					list_for_each_entry(iter, &markings->read_only_list, nodes) {
+						entry_num++;
+					}
+					printk(KERN_DEBUG "%x\n", entry_num);
 					mutex_unlock(&tocttou_global_mutex);
 				}
 			}
 			
-		*/}
+		}
 	}
 
 	/*
