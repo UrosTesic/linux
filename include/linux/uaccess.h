@@ -183,7 +183,9 @@ _copy_from_user_check(void *to, const void __user *from, unsigned long n)
 	if (likely(access_ok(from, n))) {
 		kasan_check_write(to, n);
 		
-		_mark_user_pages_read_only(from, n);
+		if (!segment_eq(get_fs(), KERNEL_DS))
+			_mark_user_pages_read_only(from, n);
+
 		res = raw_copy_from_user(to, from, n);
 	}
 	if (unlikely(res))
@@ -226,6 +228,8 @@ _mark_user_pages_read_only(const void __user *from, unsigned long n)
 
 extern void copy_from_user_unlock(const void __user *from, unsigned long n);
 #endif /* CONFIG_TOCTTOU_PROTECTION */
+
+void unlock_marked_pages(void);
 
 static __always_inline unsigned long __must_check
 copy_from_user(void *to, const void __user *from, unsigned long n)

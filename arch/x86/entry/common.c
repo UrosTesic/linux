@@ -276,8 +276,6 @@ __visible inline void syscall_return_slowpath(struct pt_regs *regs)
 }
 
 #ifdef CONFIG_X86_64
-void unlock_marked_pages(void);
-
 __visible void do_syscall_64(unsigned long nr, struct pt_regs *regs)
 {
 	struct thread_info *ti;
@@ -305,9 +303,8 @@ __visible void do_syscall_64(unsigned long nr, struct pt_regs *regs)
 #endif
 	}
 
-#ifdef CONFIG_TOCTTOU_PROTECTION
 	unlock_marked_pages();
-#endif
+
 	syscall_return_slowpath(regs);
 }
 #endif
@@ -329,9 +326,12 @@ void unlock_marked_pages()
         	kfree(iter);
     	}		
 	}
+	current->tocttou_syscall = 0;
 }
-EXPORT_SYMBOL(unlock_marked_pages);
+#else
+void unlock_marked_pages() {}
 #endif
+EXPORT_SYMBOL(unlock_marked_pages);
 
 #if defined(CONFIG_X86_32) || defined(CONFIG_IA32_EMULATION)
 /*
