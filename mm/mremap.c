@@ -112,6 +112,8 @@ static pte_t move_soft_dirty_pte(pte_t pte)
 	return pte;
 }
 
+extern struct mutex tocttou_global_mutex;
+
 static void move_ptes(struct vm_area_struct *vma, pmd_t *old_pmd,
 		unsigned long old_addr, unsigned long old_end,
 		struct vm_area_struct *new_vma, pmd_t *new_pmd,
@@ -173,8 +175,29 @@ static void move_ptes(struct vm_area_struct *vma, pmd_t *old_pmd,
 		 * the TLB entry for the old mapping has been
 		 * flushed.
 		 */
-		if (pte_present(pte))
+		if (pte_present(pte)) {
 			force_flush = true;
+
+			if (!pte_write(pte)) {
+				struct page *current_page = pte_page(pte);
+				struct tocttou_page_data *markings = READ_ONCE(current_page->markings);
+
+				if (markings) {
+					mutex_lock(&tocttou_global_mutex);
+					markings = READ_ONCE(current_page->markings);
+
+					if (!markings) {
+						mutex_unlock(&tocttou_global_mutex);
+					} else {
+						struct read_only_refs_node *iter;
+						list_for_each_entry(iter, &markings->read_only_list, nodes) {
+							if (iter->vma == vma) iter->vma = new_vma;
+						}
+						mutex_unlock(&tocttou_global_mutex);
+					}
+				}
+			}
+		}
 		pte = move_pte(pte, new_vma->vm_page_prot, old_addr, new_addr);
 		pte = move_soft_dirty_pte(pte);
 		set_pte_at(mm, new_addr, new_pte, pte);

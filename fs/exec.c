@@ -573,7 +573,7 @@ static int copy_strings(int argc, struct user_arg_ptr argv,
 				kpos = pos & PAGE_MASK;
 				flush_arg_page(bprm, kpos, kmapped_page);
 			}
-			if (copy_from_user(kaddr+offset, str, bytes_to_copy)) {
+			if (copy_from_user_check(kaddr+offset, str, bytes_to_copy)) {
 				ret = -EFAULT;
 				goto out;
 			}

@@ -79,7 +79,9 @@ static unsigned long change_pte_range(struct vm_area_struct *vma, pmd_t *pmd,
 			 */
 			if (prot_numa) {
 				struct page *page;
-
+				
+				/* TOCTTOU DOESN'T SUPPORT NUMA YET */
+				BUG();
 				page = vm_normal_page(vma, addr, oldpte);
 				if (!page || PageKsm(page))
 					continue;
