@@ -668,7 +668,6 @@ out:
 }
 #endif
 
-extern struct mutex tocttou_global_mutex;
 /*
  * copy one vm_area from one task to the other. Assumes the page tables
  * already present in the new task to be cleared in the whole range
@@ -770,11 +769,11 @@ copy_one_pte(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 
 			if (markings) {
 				printk(KERN_DEBUG "Copying a page with markings!\n");
-				mutex_lock(&tocttou_global_mutex);
+				lock_tocttou_mutex();
 				markings = READ_ONCE(page_frame->markings);
 
 				if (!markings) {
-					mutex_unlock(&tocttou_global_mutex);
+					unlock_tocttou_mutex();
 				} else {
 					struct read_only_refs_node *iter;
 					struct vm_area_struct *vma_iter;
@@ -817,7 +816,7 @@ copy_one_pte(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 						entry_num++;
 					}
 					printk(KERN_DEBUG "%x\n", entry_num);
-					mutex_unlock(&tocttou_global_mutex);
+					unlock_tocttou_mutex();
 				}
 			}
 			
@@ -3852,7 +3851,6 @@ static vm_fault_t wp_huge_pud(struct vm_fault *vmf, pud_t orig_pud)
 	return VM_FAULT_FALLBACK;
 }
 
-extern struct mutex tocttou_global_mutex;
 /*
  * These routines also need to handle stuff like marking pages dirty
  * and/or accessed for architectures that don't do it in hardware (most
@@ -3924,29 +3922,29 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 	if (accessed_page->markings) {
 		struct tocttou_page_data *markings;
 		pte_unmap(vmf->orig_pte);
-		mutex_lock(&tocttou_global_mutex);
+		lock_tocttou_mutex();
 
 		markings = READ_ONCE(accessed_page->markings);
 
 		if (!accessed_page->markings) {
-			mutex_unlock(&tocttou_global_mutex);
+			unlock_tocttou_mutex();
 		} else {
 			markings->guests++;
 
 			up_read(&current->mm->mmap_sem);
-			mutex_unlock(&tocttou_global_mutex);
+			unlock_tocttou_mutex();
 
 			wait_for_completion(&markings->unmarking_completed);
 
 			down_read(&current->mm->mmap_sem);
-			mutex_lock(&tocttou_global_mutex);
+			lock_tocttou_mutex();
 
 			markings->guests--;
 			if (!markings->guests) {
 				kfree((void*) markings);
 			}
 
-			mutex_unlock(&tocttou_global_mutex);
+			unlock_tocttou_mutex();
 		}
 		return VM_FAULT_MAJOR;
 	}

@@ -171,8 +171,10 @@ _copy_to_user(void __user *, const void *, unsigned long);
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
 
-//#ifdef INLINE_COPY_FROM_USER
 void lock_page_from_va(unsigned long vaddr);
+void init_tocttou_mutex(void);
+void lock_tocttou_mutex(void);
+void unlock_tocttou_mutex(void);
 
 
 static inline __must_check unsigned long

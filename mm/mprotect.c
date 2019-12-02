@@ -111,6 +111,24 @@ static unsigned long change_pte_range(struct vm_area_struct *vma, pmd_t *pmd,
 					continue;
 			}
 
+			/* In the case we encounter a RO page we need to check whether
+			 * it is marked as RO by the TOCTTOU protection. If that is so
+			 * we shouldn't change the permissions, but add/remove VMA from
+			 * the RO list in the page marking data.
+			 */
+			if (!pte_write(oldpte)) {
+				struct page *page = pte_page(oldpte);
+				struct tocttou_page_data *markings = READ_ONCE(page->markings);
+
+				if (markings) {
+					lock_tocttou_mutex();
+					markings = READ_ONCE(page->markings);
+					if (!markings) {
+						unlock_tocttou_mutex();
+					}
+				}
+			}
+
 			oldpte = ptep_modify_prot_start(vma, addr, pte);
 			ptent = pte_modify(oldpte, newprot);
 			if (preserve_write)

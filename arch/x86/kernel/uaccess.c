@@ -9,7 +9,24 @@
 #ifdef CONFIG_TOCTTOU_PROTECTION
 
 struct mutex tocttou_global_mutex;
-EXPORT_SYMBOL(tocttou_global_mutex);
+
+void inline init_tocttou_mutex()
+{
+	mutex_init(&tocttou_global_mutex);
+}
+EXPORT_SYMBOL(init_tocttou_mutex);
+
+void inline lock_tocttou_mutex()
+{
+	mutex_lock(&tocttou_global_mutex);
+}
+EXPORT_SYMBOL(lock_tocttou_mutex);
+
+void inline unlock_tocttou_mutex()
+{
+	mutex_unlock(&tocttou_global_mutex);
+}
+EXPORT_SYMBOL(unlock_tocttou_mutex);
 
 static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
 		     unsigned long address, void *arg)
@@ -167,7 +184,7 @@ void lock_page_from_va(unsigned long vaddr)
 
 	activate_page(target_page);
 
-	mutex_lock(&tocttou_global_mutex);
+	lock_tocttou_mutex();
 	
 	// Allocate and initialize the mark data
 	//
@@ -188,7 +205,7 @@ void lock_page_from_va(unsigned long vaddr)
 	markings->owners++;
 	list_add(&new_node->other_nodes, &current->marked_pages_list);
 
-	mutex_unlock(&tocttou_global_mutex);
+	unlock_tocttou_mutex();
 }
 EXPORT_SYMBOL(lock_page_from_va);
 #endif
@@ -205,7 +222,7 @@ void unlock_pages_from_page_frame(struct page* target_page)
 		.anon_lock = page_lock_anon_vma_read,
 	};
 	
-	mutex_lock(&tocttou_global_mutex);
+	lock_tocttou_mutex();
 	
 
 	markings = READ_ONCE(target_page->markings);
@@ -229,7 +246,7 @@ void unlock_pages_from_page_frame(struct page* target_page)
 		complete_all(&markings->unmarking_completed);
 		ClearPageTocttou(target_page);
 	}
-	mutex_unlock(&tocttou_global_mutex);
+	unlock_tocttou_mutex();
 }
 EXPORT_SYMBOL(unlock_pages_from_page_frame);
 #endif

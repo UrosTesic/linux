@@ -112,7 +112,6 @@ static pte_t move_soft_dirty_pte(pte_t pte)
 	return pte;
 }
 
-extern struct mutex tocttou_global_mutex;
 
 static void move_ptes(struct vm_area_struct *vma, pmd_t *old_pmd,
 		unsigned long old_addr, unsigned long old_end,
@@ -183,17 +182,17 @@ static void move_ptes(struct vm_area_struct *vma, pmd_t *old_pmd,
 				struct tocttou_page_data *markings = READ_ONCE(current_page->markings);
 
 				if (markings) {
-					mutex_lock(&tocttou_global_mutex);
+					lock_tocttou_mutex();
 					markings = READ_ONCE(current_page->markings);
 
 					if (!markings) {
-						mutex_unlock(&tocttou_global_mutex);
+						unlock_tocttou_mutex();
 					} else {
 						struct read_only_refs_node *iter;
 						list_for_each_entry(iter, &markings->read_only_list, nodes) {
 							if (iter->vma == vma) iter->vma = new_vma;
 						}
-						mutex_unlock(&tocttou_global_mutex);
+						unlock_tocttou_mutex();
 					}
 				}
 			}

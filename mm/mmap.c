@@ -715,6 +715,136 @@ static inline void __vma_unlink_prev(struct mm_struct *mm,
 	__vma_unlink_common(mm, vma, prev, true, vma);
 }
 
+static inline void __vma_relink_tocttou(struct mm_struct *vma,
+					unsigned long start, unsigned long end)
+{
+
+}
+
+static void adjust_marked_pages_pte_one(pte_t *pte, struct vm_area_struct *src, struct vm_area_struct *dst)
+{
+	struct page *page;
+	struct tocttou_page_data *markings;
+	struct read_only_refs_node *iter;
+
+	if (!pte_present(*pte)) return;
+
+	page = pte_page(*pte);
+	markings = READ_ONCE(page->markings);
+
+	if (!markings) return;
+
+	lock_tocttou_mutex();
+
+	list_for_each_entry(iter, &markings->read_only_list, nodes) {
+		if (iter->vma == src) {
+			iter->vma = dst;
+			break;
+		}
+	}
+
+	unlock_tocttou_mutex();	
+}
+
+static void adjust_marked_pages_pte_range(pmd_t *pmd, struct vm_area_struct *src, struct vm_area_struct *dst,
+			unsigned long start, unsigned long end)
+{
+	unsigned long addr = start;
+
+	while (addr < end) {
+		pte_t *current_pte = pte_offset_map(pmd, addr);
+
+		adjust_marked_pages_pte_one(current_pte, src, dst);
+		pte_unmap(current_pte);
+		addr += PAGE_SIZE;
+	}
+}
+
+static void adjust_marked_pages_pmd_range(pud_t *pud, struct vm_area_struct *src, struct vm_area_struct *dst,
+			unsigned long start, unsigned long end)
+{
+	unsigned long addr = start;
+
+	while (addr < end) {
+		pmd_t *current_pmd = pmd_offset(pud, addr);
+		unsigned long next = pmd_addr_end(addr, end);
+		
+		if (pmd_none_or_clear_bad(current_pmd))
+		    continue;
+
+		adjust_marked_pages_pte_range(current_pmd, src, dst, addr, next);
+		addr = next;
+	}
+}
+
+static void adjust_marked_pages_pud_range(p4d_t *p4d, struct vm_area_struct *src, struct vm_area_struct *dst,
+            unsigned long start, unsigned long end)
+{
+	unsigned long addr = start;
+
+	while (addr < end) {
+		pud_t *current_pud = pud_offset(p4d, addr);
+		unsigned long next = pud_addr_end(addr, end);
+
+		if (pud_none_or_clear_bad(current_pud))
+		    continue;
+
+		adjust_marked_pages_pmd_range(current_pud, src, dst, addr, next);
+		addr = next;
+	}
+}
+
+static void adjust_marked_pages_p4d_range(pgd_t *pgd, struct vm_area_struct *src, struct vm_area_struct *dst,
+			unsigned long start, unsigned long end)
+{
+	unsigned long addr = start;
+
+	while (addr < end) {
+		p4d_t *current_p4d = p4d_offset(pgd, addr);
+		unsigned long next = p4d_addr_end(addr, end);
+
+		if (p4d_none_or_clear_bad(current_p4d))
+		    continue;
+
+		adjust_marked_pages_pud_range(current_p4d, src, dst, addr, next);
+		addr = next;
+	}
+}
+
+static void adjust_marked_pages_pgd_range(struct vm_area_struct *src, struct vm_area_struct *dst,
+            unsigned long start, unsigned long end)
+{
+	struct mm_struct *mm = src->vm_mm;
+	unsigned long addr = start;
+
+	while (addr < end) {
+		pgd_t *current_pgd = pgd_offset(mm, addr);
+		unsigned next = pgd_addr_end(addr, end);
+		if (pgd_none_or_clear_bad(current_pgd))
+		    continue;
+
+		adjust_marked_pages_p4d_range(current_pgd, src, dst, addr, next);
+		addr = next;
+	}
+}
+/*
+ * We iterate through the address range in the virtual address space and
+ * redirect any RO marked pages to point to the dst VMA.
+ */
+static void vma_adjust_marked_pages(struct mm_struct *mm, unsigned long start, unsigned long end, struct vm_area_struct *dst)
+{
+	struct vm_area_struct *iter;
+
+	for (iter = mm->mmap; iter && start < iter->vm_start; iter = iter->vm_next) {}
+
+	for (; iter && end <= iter->vm_end; iter = iter->vm_next) {
+		unsigned range_start = max(start, iter->vm_start);
+		unsigned range_end = min(end, iter->vm_end);
+
+		adjust_marked_pages_pgd_range(iter, dst, range_start, range_end);
+	}
+}
+
 /*
  * We cannot adjust vm_start, vm_end, vm_pgoff fields of a vma that
  * is already present in an i_mmap tree without adjusting the tree.
@@ -806,6 +936,7 @@ int __vma_adjust(struct vm_area_struct *vma, unsigned long start,
 			VM_WARN_ON(expand != importer);
 		}
 
+		vma_adjust_marked_pages(mm, start, end, importer);
 		/*
 		 * Easily overlooked: when mprotect shifts the boundary,
 		 * make sure the expanding vma has anon_vma set if the
