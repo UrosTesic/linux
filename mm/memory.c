@@ -764,59 +764,62 @@ copy_one_pte(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 			unsigned entry_num = 0;
 			unsigned found_vma = 0;
 
-			page_frame = pte_page(pte);
-			markings = READ_ONCE(page_frame->markings);
-
-			if (markings) {
-				printk(KERN_DEBUG "Copying a page with markings!\n");
-				lock_tocttou_mutex();
+			page_frame = vm_normal_page(pte);
+			
+			if (page_frame) {
 				markings = READ_ONCE(page_frame->markings);
 
-				if (!markings) {
-					unlock_tocttou_mutex();
-				} else {
-					struct read_only_refs_node *iter;
-					struct vm_area_struct *vma_iter;
-					struct read_only_refs_node *new_node;
+				if (markings) {
+					printk(KERN_DEBUG "Copying a page with markings!\n");
+					lock_tocttou_mutex();
+					markings = READ_ONCE(page_frame->markings);
 
-					printk(KERN_DEBUG "Looking for a vma in markings!\n");
+					if (!markings) {
+						unlock_tocttou_mutex();
+					} else {
+						struct read_only_refs_node *iter;
+						struct vm_area_struct *vma_iter;
+						struct read_only_refs_node *new_node;
 
-					list_for_each_entry(iter, &markings->read_only_list, nodes) {
-						if (iter->vma == vma) {
-							found_vma = 1;
-							break;
+						printk(KERN_DEBUG "Looking for a vma in markings!\n");
+
+						list_for_each_entry(iter, &markings->read_only_list, nodes) {
+							if (iter->vma == vma) {
+								found_vma = 1;
+								break;
+							}
 						}
-					}
 
-					if (!found_vma) {
-						printk(KERN_DEBUG "Allocating a node! It is now RO\n");
+						if (!found_vma) {
+							printk(KERN_DEBUG "Allocating a node! It is now RO\n");
+							new_node = kmalloc(sizeof(*new_node), GFP_KERNEL);
+							new_node->vma = vma;
+							list_add(&new_node->nodes, &markings->read_only_list);
+						}
+
+						printk(KERN_DEBUG "%p\n", iter->vma);
+						printk(KERN_DEBUG "Add a VMA for the new process. It is also RO\n");
+						vma_iter = dst_mm->mmap;
+						while (vma_iter && vma_iter->vm_end <= addr) {
+							vma_iter = vma_iter->vm_next;
+						}
+
+						BUG_ON(!vma_iter);
+						BUG_ON(addr < vma_iter->vm_start);
+						
+						printk(KERN_DEBUG "%p\n", vma_iter);
+
+						printk(KERN_DEBUG "Allocate a new node\n");
 						new_node = kmalloc(sizeof(*new_node), GFP_KERNEL);
-						new_node->vma = vma;
+						new_node->vma = vma_iter;
 						list_add(&new_node->nodes, &markings->read_only_list);
+
+						list_for_each_entry(iter, &markings->read_only_list, nodes) {
+							entry_num++;
+						}
+						printk(KERN_DEBUG "%x\n", entry_num);
+						unlock_tocttou_mutex();
 					}
-
-					printk(KERN_DEBUG "%p\n", iter->vma);
-					printk(KERN_DEBUG "Add a VMA for the new process. It is also RO\n");
-					vma_iter = dst_mm->mmap;
-					while (vma_iter && vma_iter->vm_end <= addr) {
-						vma_iter = vma_iter->vm_next;
-					}
-
-					BUG_ON(!vma_iter);
-					BUG_ON(addr < vma_iter->vm_start);
-					
-					printk(KERN_DEBUG "%p\n", vma_iter);
-
-					printk(KERN_DEBUG "Allocate a new node\n");
-					new_node = kmalloc(sizeof(*new_node), GFP_KERNEL);
-					new_node->vma = vma_iter;
-					list_add(&new_node->nodes, &markings->read_only_list);
-
-					list_for_each_entry(iter, &markings->read_only_list, nodes) {
-						entry_num++;
-					}
-					printk(KERN_DEBUG "%x\n", entry_num);
-					unlock_tocttou_mutex();
 				}
 			}
 			

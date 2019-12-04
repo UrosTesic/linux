@@ -47,6 +47,7 @@
 #include <linux/pkeys.h>
 #include <linux/oom.h>
 #include <linux/sched/mm.h>
+#include <linux/pagewalk.h>
 
 #include <linux/uaccess.h>
 #include <asm/cacheflush.h>
@@ -721,128 +722,48 @@ static inline void __vma_relink_tocttou(struct mm_struct *vma,
 
 }
 
-static void adjust_marked_pages_pte_one(pte_t *pte, struct vm_area_struct *src, struct vm_area_struct *dst)
+
+static int adjust_marked_pages_one(pte_t *pte, unsigned long addr,
+			 unsigned long next, struct mm_walk *walk)
 {
 	struct page *page;
 	struct tocttou_page_data *markings;
 	struct read_only_refs_node *iter;
 
-	if (!pte_present(*pte)) return;
+	if (!pte_present(*pte)) return 1;
 
-	page = pte_page(*pte);
+	page = vm_normal_page(*pte);
+	if (!page) return 1;
+
 	markings = READ_ONCE(page->markings);
 
-	if (!markings) return;
+	if (!markings) return 1;
 
 	lock_tocttou_mutex();
 
 	list_for_each_entry(iter, &markings->read_only_list, nodes) {
-		if (iter->vma == src) {
-			iter->vma = dst;
+		if (iter->vma == walk->vma) {
+			iter->vma = walk->private;
 			break;
 		}
 	}
 
-	unlock_tocttou_mutex();	
+	unlock_tocttou_mutex();
+	return 1;
 }
 
-static void adjust_marked_pages_pte_range(pmd_t *pmd, struct vm_area_struct *src, struct vm_area_struct *dst,
-			unsigned long start, unsigned long end)
-{
-	unsigned long addr = start;
 
-	while (addr < end) {
-		pte_t *current_pte = pte_offset_map(pmd, addr);
-
-		adjust_marked_pages_pte_one(current_pte, src, dst);
-		pte_unmap(current_pte);
-		addr += PAGE_SIZE;
-	}
-}
-
-static void adjust_marked_pages_pmd_range(pud_t *pud, struct vm_area_struct *src, struct vm_area_struct *dst,
-			unsigned long start, unsigned long end)
-{
-	unsigned long addr = start;
-
-	while (addr < end) {
-		pmd_t *current_pmd = pmd_offset(pud, addr);
-		unsigned long next = pmd_addr_end(addr, end);
-		
-		if (pmd_none_or_clear_bad(current_pmd))
-		    continue;
-
-		adjust_marked_pages_pte_range(current_pmd, src, dst, addr, next);
-		addr = next;
-	}
-}
-
-static void adjust_marked_pages_pud_range(p4d_t *p4d, struct vm_area_struct *src, struct vm_area_struct *dst,
-            unsigned long start, unsigned long end)
-{
-	unsigned long addr = start;
-
-	while (addr < end) {
-		pud_t *current_pud = pud_offset(p4d, addr);
-		unsigned long next = pud_addr_end(addr, end);
-
-		if (pud_none_or_clear_bad(current_pud))
-		    continue;
-
-		adjust_marked_pages_pmd_range(current_pud, src, dst, addr, next);
-		addr = next;
-	}
-}
-
-static void adjust_marked_pages_p4d_range(pgd_t *pgd, struct vm_area_struct *src, struct vm_area_struct *dst,
-			unsigned long start, unsigned long end)
-{
-	unsigned long addr = start;
-
-	while (addr < end) {
-		p4d_t *current_p4d = p4d_offset(pgd, addr);
-		unsigned long next = p4d_addr_end(addr, end);
-
-		if (p4d_none_or_clear_bad(current_p4d))
-		    continue;
-
-		adjust_marked_pages_pud_range(current_p4d, src, dst, addr, next);
-		addr = next;
-	}
-}
-
-static void adjust_marked_pages_pgd_range(struct vm_area_struct *src, struct vm_area_struct *dst,
-            unsigned long start, unsigned long end)
-{
-	struct mm_struct *mm = src->vm_mm;
-	unsigned long addr = start;
-
-	while (addr < end) {
-		pgd_t *current_pgd = pgd_offset(mm, addr);
-		unsigned next = pgd_addr_end(addr, end);
-		if (pgd_none_or_clear_bad(current_pgd))
-		    continue;
-
-		adjust_marked_pages_p4d_range(current_pgd, src, dst, addr, next);
-		addr = next;
-	}
-}
 /*
  * We iterate through the address range in the virtual address space and
  * redirect any RO marked pages to point to the dst VMA.
  */
 static void vma_adjust_marked_pages(struct mm_struct *mm, unsigned long start, unsigned long end, struct vm_area_struct *dst)
 {
-	struct vm_area_struct *iter;
+	struct mm_walk_ops walk_ops = {
+		.pte_entry = adjust_marked_pages_one
+	};
 
-	for (iter = mm->mmap; iter && start < iter->vm_start; iter = iter->vm_next) {}
-
-	for (; iter && end <= iter->vm_end; iter = iter->vm_next) {
-		unsigned range_start = max(start, iter->vm_start);
-		unsigned range_end = min(end, iter->vm_end);
-
-		adjust_marked_pages_pgd_range(iter, dst, range_start, range_end);
-	}
+	walk_page_range(mm, start, end, &walk_ops, dst);
 }
 
 /*
@@ -1849,6 +1770,53 @@ static inline int accountable_mapping(struct file *file, vm_flags_t vm_flags)
 	return (vm_flags & (VM_NORESERVE | VM_SHARED | VM_WRITE)) == VM_WRITE;
 }
 
+
+int mark_mapped_pte_one(pte_t *pte, unsigned long addr,
+			 unsigned long next, struct mm_walk *walk)
+{
+	struct page *page;
+	struct tocttou_page_data *markings;
+	struct read_only_refs_node *temp;
+
+	if (!pte_present(*pte)) return 1;
+
+	page = vm_normal_page(*pte);
+	if (!page) return 1;
+	
+	markings = READ_ONCE(page->markings);
+
+	if (!markings) return 1;
+
+	lock_tocttou_mutex();
+
+	markings = READ_ONCE(page->markings);
+	
+	if (!markings) {
+		unlock_tocttou_mutex();
+		return 1;
+	}
+
+	if (pte_write(*pte)) {
+		*pte = pte_wrprotect(*pte);
+	} else {
+		temp = kmalloc(sizeof(*temp), GFP_KERNEL);
+		temp->vma = walk->vma;
+		list_add(&markings->read_only_list, &temp->nodes);
+	}
+
+	unlock_tocttou_mutex();
+	return 1;
+}
+
+void mark_mapped_pages(struct mm_struct *mm, unsigned long start, unsigned long end)
+{
+	struct mm_walk_ops walk_ops = {
+		.pte_entry = mark_mapped_pte_one
+	};
+
+	walk_page_range(mm, start, end, &walk_ops, NULL);
+}
+
 unsigned long mmap_region(struct file *file, unsigned long addr,
 		unsigned long len, vm_flags_t vm_flags, unsigned long pgoff,
 		struct list_head *uf)
@@ -1966,6 +1934,8 @@ unsigned long mmap_region(struct file *file, unsigned long addr,
 			allow_write_access(file);
 	}
 	file = vma->vm_file;
+
+	mark_mapped_pages(mm, vma->vm_start, vma->vm_end);
 out:
 	perf_event_mmap(vma);
 
@@ -1992,6 +1962,8 @@ out:
 	vma->vm_flags |= VM_SOFTDIRTY;
 
 	vma_set_page_prot(vma);
+
+	mark_mapped_pages(mm, vma->vm_start, vma->vm_end);
 
 	return addr;
 
@@ -2867,6 +2839,49 @@ int split_vma(struct mm_struct *mm, struct vm_area_struct *vma,
 	return __split_vma(mm, vma, addr, new_below);
 }
 
+static int unmark_pages_to_be_unmapped_one(pte_t *pte, unsigned long addr,
+			 unsigned long next, struct mm_walk *walk)
+{
+	struct page *page;
+	struct tocttou_page_data *markings;
+	struct read_only_refs_node *iter;
+	struct read_only_refs_node *temp;
+
+	if (!pte_present(*pte) || pte_write(*pte)) return 1;
+
+	page = pte_page(*pte);
+	markings = READ_ONCE(page->markings);
+
+	if (!markings) return 1;
+
+	lock_tocttou_mutex();
+
+	markings = READ_ONCE(page->markings);
+	
+	if (!markings) {
+		unlock_tocttou_mutex();
+		return 1;
+	}
+
+	list_for_each_entry_safe(iter, temp, &markings->read_only_list, nodes) {
+		if (iter->vma == walk->vma) {
+			list_del(&temp->nodes);
+			kfree(temp);
+		}
+	}
+
+	unlock_tocttou_mutex();
+	return 1;
+}
+
+void unmark_pages_to_be_unmapped(struct mm_struct *mm, unsigned long start, unsigned long end)
+{
+	struct mm_walk_ops walk_ops = {
+		.pte_entry = unmark_pages_to_be_unmapped_one
+	};
+
+	walk_page_range(mm, start, end, &walk_ops, NULL);
+}
 /* Munmap is split into 2 main parts -- this part which finds
  * what needs doing, and the areas themselves, which do the
  * work.  This now handles partial unmappings.
@@ -2877,6 +2892,7 @@ int __do_munmap(struct mm_struct *mm, unsigned long start, size_t len,
 {
 	unsigned long end;
 	struct vm_area_struct *vma, *prev, *last;
+
 
 	if ((offset_in_page(start)) || start > TASK_SIZE || len > TASK_SIZE-start)
 		return -EINVAL;
@@ -2966,7 +2982,8 @@ int __do_munmap(struct mm_struct *mm, unsigned long start, size_t len,
 			tmp = tmp->vm_next;
 		}
 	}
-
+    
+	unmark_pages_to_be_unmapped(mm, start, end);
 	/* Detach vmas from rbtree */
 	detach_vmas_to_be_unmapped(mm, vma, prev, end);
 

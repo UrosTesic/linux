@@ -123,8 +123,38 @@ static unsigned long change_pte_range(struct vm_area_struct *vma, pmd_t *pmd,
 				if (markings) {
 					lock_tocttou_mutex();
 					markings = READ_ONCE(page->markings);
+
 					if (!markings) {
 						unlock_tocttou_mutex();
+					} else {
+						struct read_only_refs_node *iter;
+						struct read_only_refs_node *temp;
+						struct read_only_refs_node *new_node;
+						
+						/* Making the page writable */
+						if (pgprot_val(newprot) & _PAGE_RW) {
+							list_for_each_entry_safe(iter, temp, &markings->read_only_list, nodes) {
+								if (iter->vma == vma) {
+									list_del(&temp->nodes);
+									kfree(temp);
+								}
+							}
+						/* Making the page read-only */
+						} else if (!(pgprot_val(newprot) & _PAGE_RW)) {
+							int found_vma = 0;
+							list_for_each_entry(iter, &markings->read_only_list, nodes) {
+								if (iter->vma == vma) {
+									found_vma = 1;
+									break;
+								}
+							}
+
+							if (!found_vma) {
+								new_node = kmalloc(sizeof(*new_node), GFP_KERNEL);
+								new_node->vma = vma;
+								list_add(&new_node->nodes, &markings->read_only_list);
+							}
+						}
 					}
 				}
 			}
