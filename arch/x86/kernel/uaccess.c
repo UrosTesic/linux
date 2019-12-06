@@ -43,21 +43,20 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
 	// Find the PTE which maps the address
 	//
 	while (page_vma_mapped_walk(&pvmw)) {
+		struct permission_refs_node *new_node;
 		pte_t * ppte = pvmw.pte;
 
-		// For a writable page, just mark as RO
+		new_node = kmalloc(sizeof(*new_node), GFP_KERNEL);
+		new_node->vma = vma;
+		new_node->is_writable = pte_write(*ppte);
+
+		list_add(&new_node->nodes, &page->markings->old_permissions_list);
+		// Save permissions
 		//
 		if (pte_write(*ppte)) {
 			printk(KERN_DEBUG "Locking W page\n");
 			*ppte = pte_wrprotect(*ppte);
-
-		// Keep track of RO pages
-		//
 		} else {
-			struct read_only_refs_node *new_node;
-			new_node = kmalloc(sizeof(*new_node), GFP_KERNEL);
-			new_node->vma = vma;
-			list_add(&new_node->nodes, &page->markings->read_only_list);
 			printk(KERN_DEBUG "Locking RO page\n");
 		}
 
@@ -86,20 +85,19 @@ static bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
 	// Find the PTE which maps the address
 	//
 	while (page_vma_mapped_walk(&pvmw)) {
-		bool is_read_only = false;
-		struct read_only_refs_node *iter;
+		bool is_writable;
+		struct permission_refs_node *iter;
 		pte_t * ppte = pvmw.pte;
 
 		BUG_ON(pte_write(*ppte));
 
-		list_for_each_entry(iter, &markings->read_only_list, nodes) {
+		list_for_each_entry(iter, &markings->old_permissions_list, nodes) {
 			if (iter->vma == vma) {
-				is_read_only = true;
 				break;
 			}
 		}
 
-		if (!is_read_only) {
+		if (iter->is_writable) {
 			set_pte(ppte, pte_mkwrite(*ppte));
 			printk(KERN_DEBUG "Unocking W page\n");
 		} else {
@@ -231,13 +229,13 @@ void unlock_pages_from_page_frame(struct page* target_page)
 	markings->owners--;
 	if (!markings->owners)
 	{	
-		struct read_only_refs_node *iter;
-		struct read_only_refs_node *temp;
+		struct permission_refs_node *iter;
+		struct permission_refs_node *temp;
 
 		rmap_walk(target_page, &rwc);
 		printk(KERN_DEBUG "Pages freed: %u\n", total);
 
-		list_for_each_entry_safe(iter, temp, &markings->read_only_list, nodes) {
+		list_for_each_entry_safe(iter, temp, &markings->old_permissions_list, nodes) {
 			list_del(&iter->nodes);
 			kfree(iter);
 		}

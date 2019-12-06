@@ -127,33 +127,26 @@ static unsigned long change_pte_range(struct vm_area_struct *vma, pmd_t *pmd,
 					if (!markings) {
 						unlock_tocttou_mutex();
 					} else {
-						struct read_only_refs_node *iter;
-						struct read_only_refs_node *temp;
-						struct read_only_refs_node *new_node;
-						
+						struct permission_refs_node *iter;
+						struct permission_refs_node *temp;
+						struct permission_refs_node *new_node;
+						unsigned is_writable = pgprot_val(newprot) & _PAGE_RW;
 						/* Making the page writable */
-						if (pgprot_val(newprot) & _PAGE_RW) {
-							list_for_each_entry_safe(iter, temp, &markings->read_only_list, nodes) {
-								if (iter->vma == vma) {
-									list_del(&temp->nodes);
-									kfree(temp);
-								}
+						
+						int found_vma = 0;
+						list_for_each_entry(iter, &markings->read_only_list, nodes) {
+							if (iter->vma == vma) {
+								found_vma = 1;
+								iter->is_writable = is_writable;
+								break;
 							}
-						/* Making the page read-only */
-						} else if (!(pgprot_val(newprot) & _PAGE_RW)) {
-							int found_vma = 0;
-							list_for_each_entry(iter, &markings->read_only_list, nodes) {
-								if (iter->vma == vma) {
-									found_vma = 1;
-									break;
-								}
-							}
+						}
 
-							if (!found_vma) {
-								new_node = kmalloc(sizeof(*new_node), GFP_KERNEL);
-								new_node->vma = vma;
-								list_add(&new_node->nodes, &markings->read_only_list);
-							}
+						if (!found_vma) {
+							new_node = kmalloc(sizeof(*new_node), GFP_KERNEL);
+							new_node->vma = vma;
+							new_node->is_writable = is_writable;
+							list_add(&new_node->nodes, &markings->read_only_list);
 						}
 					}
 				}

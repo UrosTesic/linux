@@ -66,8 +66,9 @@ struct mem_cgroup;
 #define _struct_page_alignment
 #endif
 
-struct read_only_refs_node
+struct permission_refs_node
 {
+	unsigned is_writable;
 	struct vm_area_struct *vma;
 	struct list_head nodes;
 };
@@ -77,7 +78,7 @@ struct tocttou_page_data
 	unsigned owners;
 	unsigned guests;
 	struct completion unmarking_completed;
-	struct list_head read_only_list;
+	struct list_head old_permissions_list;
 };
 
 static inline void INIT_TOCTTOU_PAGE_DATA(struct tocttou_page_data *data)

@@ -179,7 +179,7 @@ static void move_ptes(struct vm_area_struct *vma, pmd_t *old_pmd,
 
 			if (!pte_write(pte)) {
 				struct page *current_page = pte_page(pte);
-				struct tocttou_page_data *markings = READ_ONCE(current_page->markings);
+				struct permission_refs_node *markings = READ_ONCE(current_page->markings);
 
 				if (markings) {
 					lock_tocttou_mutex();
@@ -188,8 +188,8 @@ static void move_ptes(struct vm_area_struct *vma, pmd_t *old_pmd,
 					if (!markings) {
 						unlock_tocttou_mutex();
 					} else {
-						struct read_only_refs_node *iter;
-						list_for_each_entry(iter, &markings->read_only_list, nodes) {
+						struct permission_refs_node *iter;
+						list_for_each_entry(iter, &markings->old_permissions_list, nodes) {
 							if (iter->vma == vma) iter->vma = new_vma;
 						}
 						unlock_tocttou_mutex();

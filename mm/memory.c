@@ -777,14 +777,15 @@ copy_one_pte(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 					if (!markings) {
 						unlock_tocttou_mutex();
 					} else {
-						struct read_only_refs_node *iter;
+						struct permission_refs_node *iter;
 						struct vm_area_struct *vma_iter;
-						struct read_only_refs_node *new_node;
+						struct permission_refs_node *new_node;
 
 						printk(KERN_DEBUG "Looking for a vma in markings!\n");
 
-						list_for_each_entry(iter, &markings->read_only_list, nodes) {
+						list_for_each_entry(iter, &markings->old_permissions_list, nodes) {
 							if (iter->vma == vma) {
+								iter->is_writable = 0;
 								found_vma = 1;
 								break;
 							}
@@ -794,15 +795,13 @@ copy_one_pte(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 							printk(KERN_DEBUG "Allocating a node! It is now RO\n");
 							new_node = kmalloc(sizeof(*new_node), GFP_KERNEL);
 							new_node->vma = vma;
-							list_add(&new_node->nodes, &markings->read_only_list);
+							new_node->is_writable = 0;
+							list_add(&new_node->nodes, &markings->old_permissions_list);
 						}
 
 						printk(KERN_DEBUG "%p\n", iter->vma);
 						printk(KERN_DEBUG "Add a VMA for the new process. It is also RO\n");
-						vma_iter = dst_mm->mmap;
-						while (vma_iter && vma_iter->vm_end <= addr) {
-							vma_iter = vma_iter->vm_next;
-						}
+						vma_iter = find_vma(vma->vm_mm, addr);
 
 						BUG_ON(!vma_iter);
 						BUG_ON(addr < vma_iter->vm_start);
@@ -812,9 +811,9 @@ copy_one_pte(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 						printk(KERN_DEBUG "Allocate a new node\n");
 						new_node = kmalloc(sizeof(*new_node), GFP_KERNEL);
 						new_node->vma = vma_iter;
-						list_add(&new_node->nodes, &markings->read_only_list);
+						list_add(&new_node->nodes, &markings->old_permissions_list);
 
-						list_for_each_entry(iter, &markings->read_only_list, nodes) {
+						list_for_each_entry(iter, &markings->old_permissions_list, nodes) {
 							entry_num++;
 						}
 						printk(KERN_DEBUG "%x\n", entry_num);
@@ -3133,6 +3132,9 @@ static vm_fault_t __do_fault(struct vm_fault *vmf)
 {
 	struct vm_area_struct *vma = vmf->vma;
 	vm_fault_t ret;
+	struct page *page;
+	struct tocttou_page_data *markings;
+	struct permission_refs_node *temp;
 
 	/*
 	 * Preallocate pte before we take page_lock because this might lead to
@@ -3174,6 +3176,26 @@ static vm_fault_t __do_fault(struct vm_fault *vmf)
 	else
 		VM_BUG_ON_PAGE(!PageLocked(vmf->page), vmf->page);
 
+	page = vmf->page;
+	markings = READ_ONCE(page->markings);
+
+	if (markings) {
+		lock_tocttou_mutex()
+		markings = READ_ONCE(page->markings);
+
+		if (markings) {
+			temp = kmalloc(sizeof(*temp), GFP_KERNEL);
+			temp->vma = walk->vma;
+			temp->is_writable = vmf->vma->vm_flags & VM_WRITE;
+			list_add(&markings->read_only_list, &temp->nodes);
+
+			if (vmf->vma->vm_flags & VM_WRITE) {
+				*vmf->pte = pte_wrprotect(vmf->oldpte);
+			}
+		}
+		unlock_tocttou_mutex();
+	}
+	
 	return ret;
 }
 
@@ -3922,35 +3944,6 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 
 	accessed_page = pte_page(vmf->orig_pte);
 
-	if (accessed_page->markings) {
-		struct tocttou_page_data *markings;
-		pte_unmap(vmf->orig_pte);
-		lock_tocttou_mutex();
-
-		markings = READ_ONCE(accessed_page->markings);
-
-		if (!accessed_page->markings) {
-			unlock_tocttou_mutex();
-		} else {
-			markings->guests++;
-
-			up_read(&current->mm->mmap_sem);
-			unlock_tocttou_mutex();
-
-			wait_for_completion(&markings->unmarking_completed);
-
-			down_read(&current->mm->mmap_sem);
-			lock_tocttou_mutex();
-
-			markings->guests--;
-			if (!markings->guests) {
-				kfree((void*) markings);
-			}
-
-			unlock_tocttou_mutex();
-		}
-		return VM_FAULT_MAJOR;
-	}
 	
 	if (pte_protnone(vmf->orig_pte) && vma_is_accessible(vmf->vma))
 		return do_numa_page(vmf);

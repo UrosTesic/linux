@@ -728,7 +728,7 @@ static int adjust_marked_pages_one(pte_t *pte, unsigned long addr,
 {
 	struct page *page;
 	struct tocttou_page_data *markings;
-	struct read_only_refs_node *iter;
+	struct permission_refs_node *iter;
 
 	if (!pte_present(*pte)) return 1;
 
@@ -741,7 +741,7 @@ static int adjust_marked_pages_one(pte_t *pte, unsigned long addr,
 
 	lock_tocttou_mutex();
 
-	list_for_each_entry(iter, &markings->read_only_list, nodes) {
+	list_for_each_entry(iter, &markings->old_permissions_list, nodes) {
 		if (iter->vma == walk->vma) {
 			iter->vma = walk->private;
 			break;
@@ -1776,13 +1776,13 @@ int mark_mapped_pte_one(pte_t *pte, unsigned long addr,
 {
 	struct page *page;
 	struct tocttou_page_data *markings;
-	struct read_only_refs_node *temp;
+	struct permission_refs_node *temp;
 
 	if (!pte_present(*pte)) return 1;
 
 	page = vm_normal_page(*pte);
 	if (!page) return 1;
-	
+
 	markings = READ_ONCE(page->markings);
 
 	if (!markings) return 1;
@@ -1796,12 +1796,13 @@ int mark_mapped_pte_one(pte_t *pte, unsigned long addr,
 		return 1;
 	}
 
+	temp = kmalloc(sizeof(*temp), GFP_KERNEL);
+	temp->vma = walk->vma;
+	temp->is_writable = pte_write(*pte);
+	list_add(&markings->old_permissions_list, &temp->nodes);
+
 	if (pte_write(*pte)) {
 		*pte = pte_wrprotect(*pte);
-	} else {
-		temp = kmalloc(sizeof(*temp), GFP_KERNEL);
-		temp->vma = walk->vma;
-		list_add(&markings->read_only_list, &temp->nodes);
 	}
 
 	unlock_tocttou_mutex();
@@ -2844,8 +2845,8 @@ static int unmark_pages_to_be_unmapped_one(pte_t *pte, unsigned long addr,
 {
 	struct page *page;
 	struct tocttou_page_data *markings;
-	struct read_only_refs_node *iter;
-	struct read_only_refs_node *temp;
+	struct permission_refs_node *iter;
+	struct permission_refs_node *temp;
 
 	if (!pte_present(*pte) || pte_write(*pte)) return 1;
 
@@ -2863,7 +2864,7 @@ static int unmark_pages_to_be_unmapped_one(pte_t *pte, unsigned long addr,
 		return 1;
 	}
 
-	list_for_each_entry_safe(iter, temp, &markings->read_only_list, nodes) {
+	list_for_each_entry_safe(iter, temp, &markings->old_permissions_list, nodes) {
 		if (iter->vma == walk->vma) {
 			list_del(&temp->nodes);
 			kfree(temp);
