@@ -764,7 +764,7 @@ copy_one_pte(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 			unsigned entry_num = 0;
 			unsigned found_vma = 0;
 
-			page_frame = vm_normal_page(pte);
+			page_frame = vm_normal_page(vma, addr, pte);
 			
 			if (page_frame) {
 				markings = READ_ONCE(page_frame->markings);
@@ -3159,6 +3159,7 @@ static vm_fault_t __do_fault(struct vm_fault *vmf)
 	}
 
 	ret = vma->vm_ops->fault(vmf);
+
 	if (unlikely(ret & (VM_FAULT_ERROR | VM_FAULT_NOPAGE | VM_FAULT_RETRY |
 			    VM_FAULT_DONE_COW)))
 		return ret;
@@ -3176,25 +3177,6 @@ static vm_fault_t __do_fault(struct vm_fault *vmf)
 	else
 		VM_BUG_ON_PAGE(!PageLocked(vmf->page), vmf->page);
 
-	page = vmf->page;
-	markings = READ_ONCE(page->markings);
-
-	if (markings) {
-		lock_tocttou_mutex()
-		markings = READ_ONCE(page->markings);
-
-		if (markings) {
-			temp = kmalloc(sizeof(*temp), GFP_KERNEL);
-			temp->vma = walk->vma;
-			temp->is_writable = vmf->vma->vm_flags & VM_WRITE;
-			list_add(&markings->read_only_list, &temp->nodes);
-
-			if (vmf->vma->vm_flags & VM_WRITE) {
-				*vmf->pte = pte_wrprotect(vmf->oldpte);
-			}
-		}
-		unlock_tocttou_mutex();
-	}
 	
 	return ret;
 }
@@ -3360,6 +3342,7 @@ vm_fault_t alloc_set_pte(struct vm_fault *vmf, struct mem_cgroup *memcg,
 	bool write = vmf->flags & FAULT_FLAG_WRITE;
 	pte_t entry;
 	vm_fault_t ret;
+	struct tocttou_page_data *markings;
 
 	if (pmd_none(*vmf->pmd) && PageTransCompound(page) &&
 			IS_ENABLED(CONFIG_TRANSPARENT_HUGE_PAGECACHE)) {
@@ -3383,23 +3366,78 @@ vm_fault_t alloc_set_pte(struct vm_fault *vmf, struct mem_cgroup *memcg,
 
 	flush_icache_page(vma, page);
 	entry = mk_pte(page, vma->vm_page_prot);
-	if (write)
+	
+	
+	if (write) {
 		entry = maybe_mkwrite(pte_mkdirty(entry), vma);
-	/* copy-on-write page */
-	if (write && !(vma->vm_flags & VM_SHARED)) {
-		inc_mm_counter_fast(vma->vm_mm, MM_ANONPAGES);
-		page_add_new_anon_rmap(page, vma, vmf->address, false);
-		mem_cgroup_commit_charge(page, memcg, false, false);
-		lru_cache_add_active_or_unevictable(page, vma);
-	} else {
-		inc_mm_counter_fast(vma->vm_mm, mm_counter_file(page));
-		page_add_file_rmap(page, false);
 	}
-	set_pte_at(vma->vm_mm, vmf->address, vmf->pte, entry);
 
-	/* no need to invalidate: a not-present page won't be cached */
-	update_mmu_cache(vma, vmf->address, vmf->pte);
+	markings = READ_ONCE(vmf->page->markings);
+	if (markings) {
+		lock_tocttou_mutex();
 
+		markings = READ_ONCE(vmf->page->markings);
+
+		if (!markings) {
+			unlock_tocttou_mutex();
+		}
+
+		entry = pte_wrprotect(entry);
+
+		/* copy-on-write page won't be added to the permission list because it will not be mapped
+		 * until the original page is unmarked
+		 */ 
+		if (write && !(vma->vm_flags & VM_SHARED)) {
+			markings->guests++;
+			up_read(&vma->vm_mm->mmap_sem);
+			unlock_tocttou_mutex();
+			
+			wait_for_completion(&markings->unmarking_completed);
+
+			down_read(&vma->vm_mm->mmap_sem);
+			lock_tocttou_mutex();
+
+			markings->guests--;
+
+			if (!markings->guests) {
+				kfree(markings);
+			}
+
+			entry = pte_mkwrite(entry);
+
+			inc_mm_counter_fast(vma->vm_mm, MM_ANONPAGES);
+			page_add_new_anon_rmap(page, vma, vmf->address, false);
+			mem_cgroup_commit_charge(page, memcg, false, false);
+			lru_cache_add_active_or_unevictable(page, vma);
+		} else {
+			struct permission_refs_node *temp = kmalloc(sizeof(*temp), GFP_KERNEL);
+			temp->is_writable = vma->vm_flags & VM_WRITE;
+			temp->vma = vma;
+			list_add(&temp->nodes, &markings->old_permissions_list);
+			inc_mm_counter_fast(vma->vm_mm, mm_counter_file(page));
+			page_add_file_rmap(page, false);
+		}
+		set_pte_at(vma->vm_mm, vmf->address, vmf->pte, entry);
+
+		/* no need to invalidate: a not-present page won't be cached */
+		update_mmu_cache(vma, vmf->address, vmf->pte);
+		unlock_tocttou_mutex();
+	} else {
+		/* copy-on-write page */
+		if (write && !(vma->vm_flags & VM_SHARED)) {
+			inc_mm_counter_fast(vma->vm_mm, MM_ANONPAGES);
+			page_add_new_anon_rmap(page, vma, vmf->address, false);
+			mem_cgroup_commit_charge(page, memcg, false, false);
+			lru_cache_add_active_or_unevictable(page, vma);
+		} else {
+			inc_mm_counter_fast(vma->vm_mm, mm_counter_file(page));
+			page_add_file_rmap(page, false);
+		}
+		set_pte_at(vma->vm_mm, vmf->address, vmf->pte, entry);
+
+		/* no need to invalidate: a not-present page won't be cached */
+		update_mmu_cache(vma, vmf->address, vmf->pte);
+	}
 	return 0;
 }
 
@@ -3586,10 +3624,16 @@ static vm_fault_t do_read_fault(struct vm_fault *vmf)
 	return ret;
 }
 
+static void tocttou_wait(struct vm_fault *vmf) {
+
+}
+
 static vm_fault_t do_cow_fault(struct vm_fault *vmf)
 {
 	struct vm_area_struct *vma = vmf->vma;
 	vm_fault_t ret;
+
+
 
 	if (unlikely(anon_vma_prepare(vma)))
 		return VM_FAULT_OOM;
@@ -3944,7 +3988,36 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 
 	accessed_page = pte_page(vmf->orig_pte);
 
-	
+	if (accessed_page->markings) {
+		struct tocttou_page_data *markings;
+		pte_unmap(vmf->orig_pte);
+		lock_tocttou_mutex();
+
+		markings = READ_ONCE(accessed_page->markings);
+
+		if (!accessed_page->markings) {
+			unlock_tocttou_mutex();
+		} else {
+			markings->guests++;
+
+			up_read(&current->mm->mmap_sem);
+			unlock_tocttou_mutex();
+
+			wait_for_completion(&markings->unmarking_completed);
+
+			down_read(&current->mm->mmap_sem);
+			lock_tocttou_mutex();
+
+			markings->guests--;
+			if (!markings->guests) {
+				kfree((void*) markings);
+			}
+
+			unlock_tocttou_mutex();
+		}
+		return VM_FAULT_MAJOR;
+	}
+
 	if (pte_protnone(vmf->orig_pte) && vma_is_accessible(vmf->vma))
 		return do_numa_page(vmf);
 

@@ -179,7 +179,7 @@ static void move_ptes(struct vm_area_struct *vma, pmd_t *old_pmd,
 
 			if (!pte_write(pte)) {
 				struct page *current_page = pte_page(pte);
-				struct permission_refs_node *markings = READ_ONCE(current_page->markings);
+				struct tocttou_page_data *markings = READ_ONCE(current_page->markings);
 
 				if (markings) {
 					lock_tocttou_mutex();

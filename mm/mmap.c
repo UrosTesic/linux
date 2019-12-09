@@ -732,7 +732,7 @@ static int adjust_marked_pages_one(pte_t *pte, unsigned long addr,
 
 	if (!pte_present(*pte)) return 1;
 
-	page = vm_normal_page(*pte);
+	page = vm_normal_page(walk->vma, addr, *pte);
 	if (!page) return 1;
 
 	markings = READ_ONCE(page->markings);
@@ -1780,7 +1780,7 @@ int mark_mapped_pte_one(pte_t *pte, unsigned long addr,
 
 	if (!pte_present(*pte)) return 1;
 
-	page = vm_normal_page(*pte);
+	page = vm_normal_page(walk->vma, addr, *pte);
 	if (!page) return 1;
 
 	markings = READ_ONCE(page->markings);

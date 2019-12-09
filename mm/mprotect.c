@@ -134,7 +134,7 @@ static unsigned long change_pte_range(struct vm_area_struct *vma, pmd_t *pmd,
 						/* Making the page writable */
 						
 						int found_vma = 0;
-						list_for_each_entry(iter, &markings->read_only_list, nodes) {
+						list_for_each_entry(iter, &markings->old_permissions_list, nodes) {
 							if (iter->vma == vma) {
 								found_vma = 1;
 								iter->is_writable = is_writable;
@@ -146,7 +146,7 @@ static unsigned long change_pte_range(struct vm_area_struct *vma, pmd_t *pmd,
 							new_node = kmalloc(sizeof(*new_node), GFP_KERNEL);
 							new_node->vma = vma;
 							new_node->is_writable = is_writable;
-							list_add(&new_node->nodes, &markings->read_only_list);
+							list_add(&new_node->nodes, &markings->old_permissions_list);
 						}
 					}
 				}
