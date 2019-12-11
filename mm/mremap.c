@@ -190,7 +190,11 @@ static void move_ptes(struct vm_area_struct *vma, pmd_t *old_pmd,
 					} else {
 						struct permission_refs_node *iter;
 						list_for_each_entry(iter, &markings->old_permissions_list, nodes) {
-							if (iter->vma == vma) iter->vma = new_vma;
+							if (iter->vma == vma) {
+								iter->vma = new_vma;
+								break;
+							}
+						
 						}
 						unlock_tocttou_mutex();
 					}

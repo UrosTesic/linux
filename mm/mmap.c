@@ -1936,7 +1936,7 @@ unsigned long mmap_region(struct file *file, unsigned long addr,
 	}
 	file = vma->vm_file;
 
-	mark_mapped_pages(mm, vma->vm_start, vma->vm_end);
+	// mark_mapped_pages(mm, vma->vm_start, vma->vm_end);
 out:
 	perf_event_mmap(vma);
 
@@ -1964,7 +1964,7 @@ out:
 
 	vma_set_page_prot(vma);
 
-	mark_mapped_pages(mm, vma->vm_start, vma->vm_end);
+	// mark_mapped_pages(mm, vma->vm_start, vma->vm_end);
 
 	return addr;
 

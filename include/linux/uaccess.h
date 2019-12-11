@@ -232,12 +232,15 @@ extern void copy_from_user_unlock(const void __user *from, unsigned long n);
 #endif /* CONFIG_TOCTTOU_PROTECTION */
 
 void unlock_marked_pages(void);
+int remove_vma_from_markings(struct tocttou_page_data *markings, struct vm_area_struct *vma);
+int substitute_vma_in_markings(struct tocttou_page_data *markings, struct vm_area_struct *old_vma, struct vm_area_struct *new_vma);
+struct permission_refs_node* find_vma_in_markings(struct tocttou_page_data *markings, struct vm_area_struct *vma);
 
 static __always_inline unsigned long __must_check
 copy_from_user(void *to, const void __user *from, unsigned long n)
 {
 	if (likely(check_copy_size(to, n, false)))
-		n = _copy_from_user(to, from, n);
+		n = _copy_from_user_check(to, from, n);
 	return n;
 }
 

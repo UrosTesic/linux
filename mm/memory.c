@@ -791,13 +791,15 @@ copy_one_pte(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 							}
 						}
 
-						if (!found_vma) {
+						BUG_ON(!found_vma);
+
+						/*if (!found_vma) {
 							printk(KERN_DEBUG "Allocating a node! It is now RO\n");
 							new_node = kmalloc(sizeof(*new_node), GFP_KERNEL);
 							new_node->vma = vma;
 							new_node->is_writable = 0;
 							list_add(&new_node->nodes, &markings->old_permissions_list);
-						}
+						}*/
 
 						printk(KERN_DEBUG "%p\n", iter->vma);
 						printk(KERN_DEBUG "Add a VMA for the new process. It is also RO\n");
@@ -811,6 +813,7 @@ copy_one_pte(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 						printk(KERN_DEBUG "Allocate a new node\n");
 						new_node = kmalloc(sizeof(*new_node), GFP_KERNEL);
 						new_node->vma = vma_iter;
+						new_node->is_writable = 0;
 						list_add(&new_node->nodes, &markings->old_permissions_list);
 
 						list_for_each_entry(iter, &markings->old_permissions_list, nodes) {
@@ -1079,6 +1082,7 @@ static unsigned long zap_pte_range(struct mmu_gather *tlb,
 	pte_t *start_pte;
 	pte_t *pte;
 	swp_entry_t entry;
+	struct tocttou_page_data *markings;
 
 	tlb_change_page_size(tlb, PAGE_SIZE);
 again:
@@ -1109,11 +1113,25 @@ again:
 				    details->check_mapping != page_rmapping(page))
 					continue;
 			}
+
+			
 			ptent = ptep_get_and_clear_full(mm, addr, pte,
 							tlb->fullmm);
 			tlb_remove_tlb_entry(tlb, pte, addr);
 			if (unlikely(!page))
 				continue;
+
+			markings = READ_ONCE(page->markings);
+			if (markings) {
+				lock_tocttou_mutex();
+
+				markings = READ_ONCE(page->markings);
+				if (markings) {
+					remove_vma_from_markings(markings, vma);
+				}
+				unlock_tocttou_mutex();
+			}
+			
 
 			if (!PageAnon(page)) {
 				if (pte_dirty(ptent)) {
@@ -3622,10 +3640,6 @@ static vm_fault_t do_read_fault(struct vm_fault *vmf)
 	if (unlikely(ret & (VM_FAULT_ERROR | VM_FAULT_NOPAGE | VM_FAULT_RETRY)))
 		put_page(vmf->page);
 	return ret;
-}
-
-static void tocttou_wait(struct vm_fault *vmf) {
-
 }
 
 static vm_fault_t do_cow_fault(struct vm_fault *vmf)

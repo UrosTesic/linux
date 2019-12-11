@@ -142,12 +142,8 @@ static unsigned long change_pte_range(struct vm_area_struct *vma, pmd_t *pmd,
 							}
 						}
 
-						if (!found_vma) {
-							new_node = kmalloc(sizeof(*new_node), GFP_KERNEL);
-							new_node->vma = vma;
-							new_node->is_writable = is_writable;
-							list_add(&new_node->nodes, &markings->old_permissions_list);
-						}
+						BUG_ON(!found_vma);
+
 					}
 				}
 			}

@@ -250,6 +250,48 @@ EXPORT_SYMBOL(unlock_pages_from_page_frame);
 #endif
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
+int remove_vma_from_markings(struct tocttou_page_data *markings, struct vm_area_struct *vma)
+{
+	struct permission_refs_node *iter;
+	struct permission_refs_node *temp;
+	list_for_each_entry_safe(iter, temp, &markings->old_permissions_list, nodes) {
+		if (iter->vma == vma) {
+			list_del(&iter->nodes);
+			kfree(iter);
+			return 0;
+		}
+	}
+	return 1;
+}
+EXPORT_SYMBOL(remove_vma_from_markings);
+
+int substitute_vma_in_markings(struct tocttou_page_data *markings, struct vm_area_struct *old_vma, struct vm_area_struct *new_vma)
+{
+	struct permission_refs_node *iter;
+	list_for_each_entry(iter, &markings->old_permissions_list, nodes) {
+		if (iter->vma == old_vma) {
+			iter->vma = new_vma;
+			return 0;
+		}
+	}
+	return 1;
+}
+EXPORT_SYMBOL(substitute_vma_in_markings);
+
+struct permission_refs_node* find_vma_in_markings(struct tocttou_page_data *markings, struct vm_area_struct *vma)
+{
+	struct permission_refs_node *iter;
+	list_for_each_entry(iter, &markings->old_permissions_list, nodes) {
+		if (iter->vma == vma) {
+			return iter;
+		}
+	}
+	return NULL;
+}
+EXPORT_SYMBOL(find_vma_in_markings);
+#endif
+
+#ifdef CONFIG_TOCTTOU_PROTECTION
 /*__always_inline*/ void 
 copy_from_user_unlock(const void __user *from, unsigned long n)
 {
