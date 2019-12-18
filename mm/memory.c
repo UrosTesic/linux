@@ -3360,7 +3360,7 @@ vm_fault_t alloc_set_pte(struct vm_fault *vmf, struct mem_cgroup *memcg,
 	bool write = vmf->flags & FAULT_FLAG_WRITE;
 	pte_t entry;
 	vm_fault_t ret;
-	struct tocttou_page_data *markings;
+	struct tocttou_page_data *markings = NULL;
 
 	if (pmd_none(*vmf->pmd) && PageTransCompound(page) &&
 			IS_ENABLED(CONFIG_TRANSPARENT_HUGE_PAGECACHE)) {
@@ -3390,7 +3390,9 @@ vm_fault_t alloc_set_pte(struct vm_fault *vmf, struct mem_cgroup *memcg,
 		entry = maybe_mkwrite(pte_mkdirty(entry), vma);
 	}
 
-	markings = READ_ONCE(vmf->page->markings);
+	if (page)
+		markings = READ_ONCE(page->markings);
+
 	if (markings) {
 		lock_tocttou_mutex();
 
@@ -3934,6 +3936,60 @@ static vm_fault_t wp_huge_pud(struct vm_fault *vmf, pud_t orig_pud)
 	return VM_FAULT_FALLBACK;
 }
 
+static void alloc_and_set_kernel_pmd_chain(struct mm_struct *mm, pmd_t *pmd, unsigned long addr, pte_t* pte_entry)
+{
+	pte_t *pte_new = pte_alloc_one(mm);
+	smp_wmb();
+
+	// TO DO: Lock the page and copy the old page to the new one
+	memcpy()
+
+}
+static void alloc_and_set_kernel_pud_chain(struct mm_struct *mm, p4d_t *p4d, unsigned long addr, pte_t* new_pte)
+{
+	pud_t *pud_new = pud_alloc_one(mm, addr);
+	alloc_and_set_kernel_pmd_chain(mm, pud_new, addr, new_pte);
+	p4d_populate_safe(mm, p4d, pud_new);
+}
+
+static void alloc_and_set_kernel_p4d_chain(struct mm_struct *mm, pgd_t *pgd, unsigned long addr, pte_t* new_pte)
+{
+	p4d_t *p4d_new = p4d_alloc_one(mm, addr);
+	alloc_and_set_kernel_pud_chain(mm, p4d_new, addr, new_pte);
+	pgd_populate_safe(mm, pgd, p4d_new);
+}
+
+static void allocate_and_set_kernel_table(struct mm_struct *mm, unsigned long addr, pgd_t *pgd_user)
+{
+	pgd_t *pgd_kernel = user_to_kernel_pgdp(pgd_user);
+	
+	p4d_t *p4d_kernel = p4d_offset(pgd_kernel, addr);
+	p4d_t *p4d_user = p4d_offset(pgd_user, addr);
+
+	pud_t *pud_kernel = pud_offset(p4d_kernel, addr);
+	pud_t *pud_user = pud_offset(p4d_user, addr);
+
+	pmd_t *pmd_kernel = pmd_offset(pud_kernel, addr);
+	pmd_t *pmd_user = pmd_offset(pud_user, addr);
+
+	pte_t *pte_user = pte_offset_map(pmd_user, addr);
+	pte_t pte_kernel = pte_mkwrite(*pte_user);
+
+	if (*p4d_user != NULL && *p4d_kernel == *p4d_user) {
+		alloc_and_set_kernel_p4d_chain(mm, p4d_kernel, addr, *pmd);
+	} else if (*pud_user != NULL && *pud_kernel == *pud_user) {
+		alloc_and_set_kernel_pud_chain(mm, addr, *pmd);
+	} else if (*pmd_user != NULL && *pmd_kernel == *pmd_user) {
+		alloc_and_set_kernel_pmd_chain(mm, addr, *pmd);
+	} else if (*pte_user != NULL && *pte_kernel == *pte_user){
+
+	}
+
+	// TO DO: Write the new PTE permissions to the page table
+	if (!p4d_user || !pud_user || !pmd_user) {
+		BUG();
+	}
+}
 /*
  * These routines also need to handle stuff like marking pages dirty
  * and/or accessed for architectures that don't do it in hardware (most
@@ -4005,6 +4061,7 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 	if (accessed_page->markings) {
 		struct tocttou_page_data *markings;
 		pte_unmap(vmf->orig_pte);
+
 		lock_tocttou_mutex();
 
 		markings = READ_ONCE(accessed_page->markings);
@@ -4012,6 +4069,9 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 		if (!accessed_page->markings) {
 			unlock_tocttou_mutex();
 		} else {
+			if (!(vmf->flags & FAULT_FLAG_USER)) {
+				
+			}
 			markings->guests++;
 
 			up_read(&current->mm->mmap_sem);
