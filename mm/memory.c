@@ -754,78 +754,14 @@ copy_one_pte(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 	 * If it's a COW mapping, write protect it both
 	 * in the parent and the child
 	 */
-	if (is_cow_mapping(vm_flags)) {
-		if (pte_write(pte)) {
+
+	if (is_cow_mapping(vm_flags) && !pte_user(pte)) {
+		pte = pte_mkuser(pte);
+	}
+
+	if (is_cow_mapping(vm_flags) && pte_write(pte)) {
 			ptep_set_wrprotect(src_mm, addr, src_pte);
 			pte = pte_wrprotect(pte);
-		} else {
-			struct page *page_frame;
-			struct tocttou_page_data *markings;
-			unsigned entry_num = 0;
-			unsigned found_vma = 0;
-
-			page_frame = vm_normal_page(vma, addr, pte);
-			
-			if (page_frame) {
-				markings = READ_ONCE(page_frame->markings);
-
-				if (markings) {
-					printk(KERN_DEBUG "Copying a page with markings!\n");
-					lock_tocttou_mutex();
-					markings = READ_ONCE(page_frame->markings);
-
-					if (!markings) {
-						unlock_tocttou_mutex();
-					} else {
-						struct permission_refs_node *iter;
-						struct vm_area_struct *vma_iter;
-						struct permission_refs_node *new_node;
-
-						printk(KERN_DEBUG "Looking for a vma in markings!\n");
-
-						list_for_each_entry(iter, &markings->old_permissions_list, nodes) {
-							if (iter->vma == vma) {
-								iter->is_writable = 0;
-								found_vma = 1;
-								break;
-							}
-						}
-
-						BUG_ON(!found_vma);
-
-						/*if (!found_vma) {
-							printk(KERN_DEBUG "Allocating a node! It is now RO\n");
-							new_node = kmalloc(sizeof(*new_node), GFP_KERNEL);
-							new_node->vma = vma;
-							new_node->is_writable = 0;
-							list_add(&new_node->nodes, &markings->old_permissions_list);
-						}*/
-
-						printk(KERN_DEBUG "%p\n", iter->vma);
-						printk(KERN_DEBUG "Add a VMA for the new process. It is also RO\n");
-						vma_iter = find_vma(vma->vm_mm, addr);
-
-						BUG_ON(!vma_iter);
-						BUG_ON(addr < vma_iter->vm_start);
-						
-						printk(KERN_DEBUG "%p\n", vma_iter);
-
-						printk(KERN_DEBUG "Allocate a new node\n");
-						new_node = kmalloc(sizeof(*new_node), GFP_KERNEL);
-						new_node->vma = vma_iter;
-						new_node->is_writable = 0;
-						list_add(&new_node->nodes, &markings->old_permissions_list);
-
-						list_for_each_entry(iter, &markings->old_permissions_list, nodes) {
-							entry_num++;
-						}
-						printk(KERN_DEBUG "%x\n", entry_num);
-						unlock_tocttou_mutex();
-					}
-				}
-			}
-			
-		}
 	}
 
 	/*
@@ -3384,78 +3320,47 @@ vm_fault_t alloc_set_pte(struct vm_fault *vmf, struct mem_cgroup *memcg,
 
 	flush_icache_page(vma, page);
 	entry = mk_pte(page, vma->vm_page_prot);
-	
-	
-	if (write) {
+	if (write)
 		entry = maybe_mkwrite(pte_mkdirty(entry), vma);
-	}
+	/* copy-on-write page */
+	if (write && !(vma->vm_flags & VM_SHARED)) {
+		// We don't support marking COW pages yet
+		markings = READ_ONCE(page->markings);
+		BUG_ON(markings);
 
-	markings = READ_ONCE(vmf->page->markings);
-	if (markings) {
-		lock_tocttou_mutex();
-
-		markings = READ_ONCE(vmf->page->markings);
-
-		if (!markings) {
-			unlock_tocttou_mutex();
-		}
-
-		entry = pte_wrprotect(entry);
-
-		/* copy-on-write page won't be added to the permission list because it will not be mapped
-		 * until the original page is unmarked
-		 */ 
-		if (write && !(vma->vm_flags & VM_SHARED)) {
-			markings->guests++;
-			up_read(&vma->vm_mm->mmap_sem);
-			unlock_tocttou_mutex();
-			
-			wait_for_completion(&markings->unmarking_completed);
-
-			down_read(&vma->vm_mm->mmap_sem);
-			lock_tocttou_mutex();
-
-			markings->guests--;
-
-			if (!markings->guests) {
-				kfree(markings);
-			}
-
-			entry = pte_mkwrite(entry);
-
-			inc_mm_counter_fast(vma->vm_mm, MM_ANONPAGES);
-			page_add_new_anon_rmap(page, vma, vmf->address, false);
-			mem_cgroup_commit_charge(page, memcg, false, false);
-			lru_cache_add_active_or_unevictable(page, vma);
-		} else {
-			struct permission_refs_node *temp = kmalloc(sizeof(*temp), GFP_KERNEL);
-			temp->is_writable = vma->vm_flags & VM_WRITE;
-			temp->vma = vma;
-			list_add(&temp->nodes, &markings->old_permissions_list);
-			inc_mm_counter_fast(vma->vm_mm, mm_counter_file(page));
-			page_add_file_rmap(page, false);
-		}
-		set_pte_at(vma->vm_mm, vmf->address, vmf->pte, entry);
-
-		/* no need to invalidate: a not-present page won't be cached */
-		update_mmu_cache(vma, vmf->address, vmf->pte);
-		unlock_tocttou_mutex();
+		inc_mm_counter_fast(vma->vm_mm, MM_ANONPAGES);
+		page_add_new_anon_rmap(page, vma, vmf->address, false);
+		mem_cgroup_commit_charge(page, memcg, false, false);
+		lru_cache_add_active_or_unevictable(page, vma);
 	} else {
-		/* copy-on-write page */
-		if (write && !(vma->vm_flags & VM_SHARED)) {
-			inc_mm_counter_fast(vma->vm_mm, MM_ANONPAGES);
-			page_add_new_anon_rmap(page, vma, vmf->address, false);
-			mem_cgroup_commit_charge(page, memcg, false, false);
-			lru_cache_add_active_or_unevictable(page, vma);
+		markings = READ_ONCE(page->markings);
+
+		if (markings) {
+			lock_tocttou_mutex();
+			markings = READ_ONCE(page->markings);
+			if (!markings) {
+				unlock_tocttou_mutex();
+			} else {
+				entry = pte_userprotect(entry);
+
+				struct permission_refs_node *temp = kmalloc(sizeof(*temp), GFP_KERNEL);
+				temp->vma = vma;
+				list_add(&temp->nodes, &markings->old_permissions_list);
+
+				inc_mm_counter_fast(vma->vm_mm, mm_counter_file(page));
+				page_add_file_rmap(page, false);
+				unlock_tocttou_mutex();
+			}
 		} else {
 			inc_mm_counter_fast(vma->vm_mm, mm_counter_file(page));
 			page_add_file_rmap(page, false);
 		}
-		set_pte_at(vma->vm_mm, vmf->address, vmf->pte, entry);
-
-		/* no need to invalidate: a not-present page won't be cached */
-		update_mmu_cache(vma, vmf->address, vmf->pte);
 	}
+	set_pte_at(vma->vm_mm, vmf->address, vmf->pte, entry);
+
+	/* no need to invalidate: a not-present page won't be cached */
+	update_mmu_cache(vma, vmf->address, vmf->pte);
+
 	return 0;
 }
 

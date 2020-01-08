@@ -184,6 +184,11 @@ static inline int pte_write(pte_t pte)
 	return pte_flags(pte) & _PAGE_RW;
 }
 
+static inline int pte_user(pte_t pte)
+{
+	return pte_flags(pte) & _PAGE_USER;
+}
+
 static inline int pte_huge(pte_t pte)
 {
 	return pte_flags(pte) & _PAGE_PSE;
@@ -343,6 +348,16 @@ static inline pte_t pte_mkyoung(pte_t pte)
 static inline pte_t pte_mkwrite(pte_t pte)
 {
 	return pte_set_flags(pte, _PAGE_RW);
+}
+
+static inline pte_t pte_mkuser(pte_t pte)
+{
+	return pte_set_flags(pte, _PAGE_USER);
+}
+
+static inline pte_t pte_userprotect(pte_t pte)
+{
+	return pte_clear_flags(pte, _PAGE_USER);
 }
 
 static inline pte_t pte_mkhuge(pte_t pte)

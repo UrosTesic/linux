@@ -857,7 +857,7 @@ int __vma_adjust(struct vm_area_struct *vma, unsigned long start,
 			VM_WARN_ON(expand != importer);
 		}
 
-		vma_adjust_marked_pages(mm, start, end, importer);
+		// vma_adjust_marked_pages(mm, start, end, importer);
 		/*
 		 * Easily overlooked: when mprotect shifts the boundary,
 		 * make sure the expanding vma has anon_vma set if the
@@ -2984,7 +2984,7 @@ int __do_munmap(struct mm_struct *mm, unsigned long start, size_t len,
 		}
 	}
     
-	unmark_pages_to_be_unmapped(mm, start, end);
+	// unmark_pages_to_be_unmapped(mm, start, end);
 	/* Detach vmas from rbtree */
 	detach_vmas_to_be_unmapped(mm, vma, prev, end);
 

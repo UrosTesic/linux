@@ -5,6 +5,8 @@
 #include <asm/tlbflush.h>
 #include <linux/slab.h>
 #include <linux/rmap.h>
+#include <linux/mm.h>
+#include "../../mm/internal.h"
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
 
@@ -36,9 +38,7 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
 		.vma = vma,
 		.address = address,
 	};
-	unsigned *total;
 
-	total = arg;
 
 	// Find the PTE which maps the address
 	//
@@ -48,23 +48,15 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
 
 		new_node = kmalloc(sizeof(*new_node), GFP_KERNEL);
 		new_node->vma = vma;
-		new_node->is_writable = pte_write(*ppte);
 
-		list_add(&new_node->nodes, &page->markings->old_permissions_list);
 		// Save permissions
 		//
-		if (pte_write(*ppte)) {
-			printk(KERN_DEBUG "Locking W page\n");
-			*ppte = pte_wrprotect(*ppte);
-		} else {
-			printk(KERN_DEBUG "Locking RO page\n");
-		}
+		*ppte = pte_userprotect(*ppte);
 
 		// Flush the TLB for every page
 		//
 		flush_tlb_page(vma, address);
 		barrier();
-		(*total)++;
 	}
 	return true;
 }
@@ -78,36 +70,23 @@ static bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
 		.vma = vma,
 		.address = address,
 	};
-	unsigned *total;
-	total = arg;
+
 
 	BUG_ON(!markings);
 	// Find the PTE which maps the address
 	//
 	while (page_vma_mapped_walk(&pvmw)) {
-		bool is_writable;
 		struct permission_refs_node *iter;
 		pte_t * ppte = pvmw.pte;
 
-		BUG_ON(pte_write(*ppte));
+		if (pte_user(*ppte)) continue;
 
-		list_for_each_entry(iter, &markings->old_permissions_list, nodes) {
-			if (iter->vma == vma) {
-				break;
-			}
-		}
+		set_pte_at(vma->vm_mm, pvmw.address, pvmw.pte, pte_mkuser(*pvmw.pte));
 
-		if (iter->is_writable) {
-			set_pte(ppte, pte_mkwrite(*ppte));
-			printk(KERN_DEBUG "Unocking W page\n");
-		} else {
-			printk(KERN_DEBUG "Unlocking RO page\n");
-		}
 		// Flush the TLB for every page
 		//
 		flush_tlb_page(vma, address);
 		barrier();
-		(*total)++;
 	}
 	return true;
 }
@@ -161,16 +140,17 @@ void lock_page_from_va(unsigned long vaddr)
 	//
 	target_page = pte_page(pte);
 
-	pte_unmap(ptep);
+	// pte_unmap(ptep);
 
 	temp = &current->marked_pages_list;
 
+	if (!pte_user(*ptep)) {
 	// Check if we have already locked this page
 	//
-	list_for_each_entry(iter, temp, other_nodes) {
-		if (iter->marked_page == target_page) {
-			pte_unmap(ptep);
-			return;
+		list_for_each_entry(iter, temp, other_nodes) {
+			if (iter->marked_page == target_page) {
+				return;
+			}
 		}
 	}
 
@@ -193,8 +173,15 @@ void lock_page_from_va(unsigned long vaddr)
 
 		// Iterate through other pages and mark them
 		total = 0;
-		rmap_walk(target_page, &rwc);
-		printk(KERN_DEBUG "Pages marked RO: %u\n", total);
+
+		struct vm_area_struct *target_vma = find_vma(current->mm, vaddr);
+
+		if (!is_cow_mapping(target_vma->vm_flags)) {
+			pte_unmap(ptep);
+			rmap_walk(target_page, &rwc);
+		} else {
+			set_pte_at(current->mm, vaddr, ptep, pte_userprotect(*ptep));
+		}
 	}
 	markings = target_page->markings;
 
@@ -212,17 +199,15 @@ EXPORT_SYMBOL(lock_page_from_va);
 void unlock_pages_from_page_frame(struct page* target_page)
 {
 	struct tocttou_page_data *markings;
-	unsigned total = 0;
 
 	struct rmap_walk_control rwc = {
 		.rmap_one = page_unmark_one,
-		.arg = (void *)&total,
+		.arg = NULL,
 		.anon_lock = page_lock_anon_vma_read,
 	};
 	
 	lock_tocttou_mutex();
 	
-
 	markings = READ_ONCE(target_page->markings);
 	BUG_ON(!target_page->markings);
 	
@@ -233,12 +218,7 @@ void unlock_pages_from_page_frame(struct page* target_page)
 		struct permission_refs_node *temp;
 
 		rmap_walk(target_page, &rwc);
-		printk(KERN_DEBUG "Pages freed: %u\n", total);
 
-		list_for_each_entry_safe(iter, temp, &markings->old_permissions_list, nodes) {
-			list_del(&iter->nodes);
-			kfree(iter);
-		}
 		target_page->markings = NULL;
 
 		complete_all(&markings->unmarking_completed);

@@ -80,8 +80,6 @@ static unsigned long change_pte_range(struct vm_area_struct *vma, pmd_t *pmd,
 			if (prot_numa) {
 				struct page *page;
 				
-				/* TOCTTOU DOESN'T SUPPORT NUMA YET */
-				BUG();
 				page = vm_normal_page(vma, addr, oldpte);
 				if (!page || PageKsm(page))
 					continue;
@@ -109,43 +107,6 @@ static unsigned long change_pte_range(struct vm_area_struct *vma, pmd_t *pmd,
 				 */
 				if (target_node == page_to_nid(page))
 					continue;
-			}
-
-			/* In the case we encounter a RO page we need to check whether
-			 * it is marked as RO by the TOCTTOU protection. If that is so
-			 * we shouldn't change the permissions, but add/remove VMA from
-			 * the RO list in the page marking data.
-			 */
-			if (!pte_write(oldpte)) {
-				struct page *page = pte_page(oldpte);
-				struct tocttou_page_data *markings = READ_ONCE(page->markings);
-
-				if (markings) {
-					lock_tocttou_mutex();
-					markings = READ_ONCE(page->markings);
-
-					if (!markings) {
-						unlock_tocttou_mutex();
-					} else {
-						struct permission_refs_node *iter;
-						struct permission_refs_node *temp;
-						struct permission_refs_node *new_node;
-						unsigned is_writable = pgprot_val(newprot) & _PAGE_RW;
-						/* Making the page writable */
-						
-						int found_vma = 0;
-						list_for_each_entry(iter, &markings->old_permissions_list, nodes) {
-							if (iter->vma == vma) {
-								found_vma = 1;
-								iter->is_writable = is_writable;
-								break;
-							}
-						}
-
-						BUG_ON(!found_vma);
-
-					}
-				}
 			}
 
 			oldpte = ptep_modify_prot_start(vma, addr, pte);
