@@ -3324,9 +3324,7 @@ vm_fault_t alloc_set_pte(struct vm_fault *vmf, struct mem_cgroup *memcg,
 		entry = maybe_mkwrite(pte_mkdirty(entry), vma);
 	/* copy-on-write page */
 	if (write && !(vma->vm_flags & VM_SHARED)) {
-		// We don't support marking COW pages yet
-		markings = READ_ONCE(page->markings);
-		BUG_ON(markings);
+		// We don't mark COW pages
 
 		inc_mm_counter_fast(vma->vm_mm, MM_ANONPAGES);
 		page_add_new_anon_rmap(page, vma, vmf->address, false);
@@ -3342,10 +3340,6 @@ vm_fault_t alloc_set_pte(struct vm_fault *vmf, struct mem_cgroup *memcg,
 				unlock_tocttou_mutex();
 			} else {
 				entry = pte_userprotect(entry);
-
-				struct permission_refs_node *temp = kmalloc(sizeof(*temp), GFP_KERNEL);
-				temp->vma = vma;
-				list_add(&temp->nodes, &markings->old_permissions_list);
 
 				inc_mm_counter_fast(vma->vm_mm, mm_counter_file(page));
 				page_add_file_rmap(page, false);
