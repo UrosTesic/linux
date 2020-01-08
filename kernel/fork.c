@@ -1027,6 +1027,9 @@ static struct mm_struct *mm_init(struct mm_struct *mm, struct task_struct *p,
 #if defined(CONFIG_TRANSPARENT_HUGEPAGE) && !USE_SPLIT_PMD_PTLOCKS
 	mm->pmd_huge_pte = NULL;
 #endif
+#ifdef CONFIG_TOCTTOU_PROTECTION
+	init_rwsem(&mm->kpti_bypass_sem);
+#endif
 	mm_init_uprobes_state(mm);
 
 	if (current->mm) {
@@ -2115,6 +2118,7 @@ static __latent_entropy struct task_struct *copy_process(
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
 	INIT_LIST_HEAD(&p->marked_pages_list);
+	p->kpti_bypass = 0;
 #endif
 
 	cgroup_threadgroup_change_begin(current);

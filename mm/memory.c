@@ -3936,27 +3936,55 @@ static vm_fault_t wp_huge_pud(struct vm_fault *vmf, pud_t orig_pud)
 	return VM_FAULT_FALLBACK;
 }
 
-static void alloc_and_set_kernel_pmd_chain(struct mm_struct *mm, pmd_t *pmd, unsigned long addr, pte_t* pte_entry)
+static void register_kpti_bypass(struct mm_struct *mm, unsigned long addr)
+{
+	struct kpti_bypass_node *new_node = kmalloc(sizeof(*new_node), GFP_KERNEL);
+	new_node->page_address = addr;
+	list_add(new_node, &mm->kpti_bypass_list);
+}
+
+static void save_kpti_pgd_entry(struct mm_struct *mm, pgd_t *pgd)
+{
+	struct kpti_bypass_pgd_state *new_node = kmalloc(sizeof(*new_node), GFP_KERNEL);
+	new_node->entry = *pgd;
+	new_node->address = pgd;
+	list_add(new_node, &mm->pgd_state_list);
+}
+
+static void alloc_and_set_kernel_pmd_chain(struct mm_struct *mm, pmd_t *pmd, unsigned long addr, pte_t* pte_user)
 {
 	pte_t *pte_new = pte_alloc_one(mm);
+	register_kpti_bypass(mm, (unsigned long) pte_new);
+
+	pte_t *pte_new_entry = pte_new + pte_index(addr);
+	pte_t *pte_user_page = pte_user - pte_index(addr);
 	smp_wmb();
-
-	// TO DO: Lock the page and copy the old page to the new one
-	memcpy()
-
+	spin_lock(pmd_lockptr(mm, pmd));
+	
+	memcpy(pte_new, pte_page_user, PAGE_SIZE);
+	*pte_new_entry = pte_mkwrite(pte_user);
+	spin_unlock(pmd_lockptr(mm, pmd));
 }
-static void alloc_and_set_kernel_pud_chain(struct mm_struct *mm, p4d_t *p4d, unsigned long addr, pte_t* new_pte)
+
+static void alloc_and_set_kernel_pud_chain(struct mm_struct *mm, p4d_t *p4d, unsigned long addr, pte_t* pte_user)
 {
 	pud_t *pud_new = pud_alloc_one(mm, addr);
-	alloc_and_set_kernel_pmd_chain(mm, pud_new, addr, new_pte);
-	p4d_populate_safe(mm, p4d, pud_new);
+	register_kpti_bypass(mm, (unsigned long) pud_new);
+
+	memcpy(pud_new, pud_offset(p4d, addr) - pud_index(addr), PAGE_SIZE);
+	alloc_and_set_kernel_pmd_chain(mm, pud_new, addr, pte_user);
+	p4d_populate(mm, p4d, pud_new);
 }
 
-static void alloc_and_set_kernel_p4d_chain(struct mm_struct *mm, pgd_t *pgd, unsigned long addr, pte_t* new_pte)
+static void alloc_and_set_kernel_p4d_chain(struct mm_struct *mm, pgd_t *pgd, unsigned long addr, pte_t* pte_user)
 {
 	p4d_t *p4d_new = p4d_alloc_one(mm, addr);
-	alloc_and_set_kernel_pud_chain(mm, p4d_new, addr, new_pte);
-	pgd_populate_safe(mm, pgd, p4d_new);
+	register_kpti_bypass(mm, p4d_new);
+	save_kpti_pgd_entry(mm, pgd);
+
+	memcpy(p4d_new, p4d_offset(pgd, addr) - p4d_index(addr), PAGE_SIZE);
+	alloc_and_set_kernel_pud_chain(mm, p4d_new, addr, pte_user);
+	pgd_populate(mm, pgd, p4d_new);
 }
 
 static void allocate_and_set_kernel_table(struct mm_struct *mm, unsigned long addr, pgd_t *pgd_user)
@@ -3972,24 +4000,35 @@ static void allocate_and_set_kernel_table(struct mm_struct *mm, unsigned long ad
 	pmd_t *pmd_kernel = pmd_offset(pud_kernel, addr);
 	pmd_t *pmd_user = pmd_offset(pud_user, addr);
 
+	
 	pte_t *pte_user = pte_offset_map(pmd_user, addr);
-	pte_t pte_kernel = pte_mkwrite(*pte_user);
+	pte_t *pte_kernel = pte_offset_map(pmd_kernel, addr);
 
-	if (*p4d_user != NULL && *p4d_kernel == *p4d_user) {
-		alloc_and_set_kernel_p4d_chain(mm, p4d_kernel, addr, *pmd);
+	if (*p4d_user != NULL && (*p4d_kernel ^ *p4d_user) == _PAGE_NX) {
+		alloc_and_set_kernel_p4d_chain(mm, p4d_kernel, addr, pte_user);
 	} else if (*pud_user != NULL && *pud_kernel == *pud_user) {
-		alloc_and_set_kernel_pud_chain(mm, addr, *pmd);
+		alloc_and_set_kernel_pud_chain(mm, addr, *pud, pte_user);
 	} else if (*pmd_user != NULL && *pmd_kernel == *pmd_user) {
-		alloc_and_set_kernel_pmd_chain(mm, addr, *pmd);
+		alloc_and_set_kernel_pmd_chain(mm, addr, *pmd, pte_user);
 	} else if (*pte_user != NULL && *pte_kernel == *pte_user){
-
+		*pte_kernel = pte_mkwrite(*pte_user);
+	} else {
+		BUG();
 	}
 
-	// TO DO: Write the new PTE permissions to the page table
+	pte_unmap(pte_user);
+	pte_unmap(pte_kernel);
+
 	if (!p4d_user || !pud_user || !pmd_user) {
 		BUG();
 	}
 }
+
+void free_kpti_bypass(struct mm_struct *mm)
+{
+
+}
+
 /*
  * These routines also need to handle stuff like marking pages dirty
  * and/or accessed for architectures that don't do it in hardware (most

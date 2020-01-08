@@ -1275,6 +1275,7 @@ struct task_struct {
 #ifdef CONFIG_TOCTTOU_PROTECTION
 	unsigned tocttou_syscall;
 	struct list_head marked_pages_list;
+	unsigned kpti_bypass;
 #endif
 
 	/*

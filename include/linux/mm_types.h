@@ -81,6 +81,19 @@ struct tocttou_page_data
 	struct list_head old_permissions_list;
 };
 
+struct kpti_bypass_pgd_state
+{
+	pgd_t entry;
+	pgd_t *address;
+	struct list_head other_nodes;
+}
+
+struct kpti_bypass_node
+{
+	unsigned long page_address;
+	struct list_head other_nodes;
+};
+
 static inline void INIT_TOCTTOU_PAGE_DATA(struct tocttou_page_data *data)
 {
 	data->owners = 0;
@@ -443,6 +456,12 @@ struct mm_struct {
 
 #ifdef CONFIG_MMU
 		atomic_long_t pgtables_bytes;	/* PTE page table pages */
+#endif
+
+#ifdef CONFIG_TOCTTOU_PROTECTION
+		struct rw_semaphore kpti_bypass_sem;
+		struct list_head kpti_bypass_list;
+		struct list_head pgd_state_list;
 #endif
 		int map_count;			/* number of VMAs */
 
