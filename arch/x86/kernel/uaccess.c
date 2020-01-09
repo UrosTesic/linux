@@ -39,19 +39,13 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
 		.address = address,
 	};
 
-
+	if (is_cow_mapping(vma->vm_flags)) return true;
 	// Find the PTE which maps the address
 	//
 	while (page_vma_mapped_walk(&pvmw)) {
-		struct permission_refs_node *new_node;
 		pte_t * ppte = pvmw.pte;
 
-		new_node = kmalloc(sizeof(*new_node), GFP_KERNEL);
-		new_node->vma = vma;
-
-		// Save permissions
-		//
-		*ppte = pte_userprotect(*ppte);
+		set_pte_at(vma->vm_mm, pvmw.address, ppte, pte_userprotect(*ppte));
 
 		// Flush the TLB for every page
 		//
@@ -104,6 +98,7 @@ void lock_page_from_va(unsigned long vaddr)
 	struct list_head *temp;
 	struct tocttou_page_data *markings;
 	unsigned total;
+	unsigned retried = 0;
 
 	struct rmap_walk_control rwc = {
 		.rmap_one = page_mark_one,
@@ -114,25 +109,54 @@ void lock_page_from_va(unsigned long vaddr)
 	// Page walk to find the page frame
 	// TO DO: Replace with the visitor
 	//
-	pgd = pgd_offset(current->mm, vaddr);
-	if (!pgd)
+
+retry:
+    if (retried) {
+		BUG();
 		return;
+	}
+
+    pgd = pgd_offset(current->mm, vaddr);
+	if (!pgd_present(*pgd)) {
+		printk(KERN_ERR "Retry: %lx %lx\n", (unsigned long) task_pid_nr(current), vaddr);
+		mm_populate(vaddr, PAGE_SIZE);
+		retried = 1;
+		goto retry;
+	}
+		
 
 	p4d = p4d_offset(pgd, vaddr);
-	if (!p4d)
-		return;
+	if (!p4d_present(*p4d)) {
+		printk(KERN_ERR "Retry: %lx %lx\n", (unsigned long) task_pid_nr(current), vaddr);
+		mm_populate(vaddr, PAGE_SIZE);
+		retried = 1;
+		goto retry;
+	}
 
 	pud = pud_offset(p4d, vaddr);
-	if (!pud)
-		return;
+	if (!pud_present(*pud)) {
+		printk(KERN_ERR "Retry: %lx %lx\n", (unsigned long) task_pid_nr(current), vaddr);
+		mm_populate(vaddr, PAGE_SIZE);
+		retried = 1;
+		goto retry;
+	}
 
 	pmd = pmd_offset(pud, vaddr);
-	if (!pmd)
-		return;
+	if (!pmd_present(*pmd)) {
+		printk(KERN_ERR "Retry: %lx %lx\n", (unsigned long) task_pid_nr(current), vaddr);
+		mm_populate(vaddr, PAGE_SIZE);
+		retried = 1;
+		goto retry;
+	}
 
 	ptep = pte_offset_map(pmd, vaddr);
-	if (!ptep)
-		return;
+	if (!pte_present(*ptep)) {
+		pte_unmap(ptep);
+		printk(KERN_ERR "Retry: %lx %lx\n", (unsigned long) task_pid_nr(current), vaddr);
+		mm_populate(vaddr, PAGE_SIZE);
+		retried = 1;
+		goto retry;
+	}
 
 	pte = *ptep;
 
@@ -167,6 +191,7 @@ void lock_page_from_va(unsigned long vaddr)
 	// Allocate and initialize the mark data
 	//
 	if (!target_page->markings) {
+		//printk(KERN_ERR "Mark: %lx %lx\n", (unsigned long) task_pid_nr(current), (unsigned long) target_page);
 		target_page->markings = kmalloc(sizeof(*target_page->markings), GFP_KERNEL);
 		INIT_TOCTTOU_PAGE_DATA(target_page->markings);
 		SetPageTocttou(target_page);
@@ -205,6 +230,8 @@ void unlock_pages_from_page_frame(struct page* target_page)
 		.arg = NULL,
 		.anon_lock = page_lock_anon_vma_read,
 	};
+
+	//printk(KERN_ERR "Unmark: %lx\n", (unsigned long) (target_page));
 	
 	lock_tocttou_mutex();
 	

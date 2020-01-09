@@ -214,7 +214,7 @@ _mark_user_pages_read_only(const void __user *from, unsigned long n)
 			/* Iterate through all pages and mark them as RO
 			 * Add the pages to the list of pages locked by this process
 			 * Save whether a page is RO */
-
+			if (!address) printk(KERN_ERR "from: %lx n: %lx\n", (unsigned long) from, n);
 			down_read(&current->mm->mmap_sem);
 			lock_page_from_va(address);
 			up_read(&current->mm->mmap_sem);

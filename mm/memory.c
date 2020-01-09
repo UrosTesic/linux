@@ -3324,8 +3324,6 @@ vm_fault_t alloc_set_pte(struct vm_fault *vmf, struct mem_cgroup *memcg,
 		entry = maybe_mkwrite(pte_mkdirty(entry), vma);
 	/* copy-on-write page */
 	if (write && !(vma->vm_flags & VM_SHARED)) {
-		// We don't mark COW pages
-
 		inc_mm_counter_fast(vma->vm_mm, MM_ANONPAGES);
 		page_add_new_anon_rmap(page, vma, vmf->address, false);
 		mem_cgroup_commit_charge(page, memcg, false, false);
@@ -3900,8 +3898,10 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 		return do_swap_page(vmf);
 
 	accessed_page = pte_page(vmf->orig_pte);
+	unsigned user = pte_user(vmf->orig_pte);
+	unsigned write = pte_write(vmf->orig_pte);
 
-	if (accessed_page->markings) {
+	if (accessed_page->markings && !user) {
 		struct tocttou_page_data *markings;
 		pte_unmap(vmf->orig_pte);
 		lock_tocttou_mutex();
@@ -3915,9 +3915,9 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 
 			up_read(&current->mm->mmap_sem);
 			unlock_tocttou_mutex();
-
+			printk(KERN_ERR "Wait: PID: %lx Page: %lx Flags: %x Anonymous: %x PTE user: %x PTE write: %x No threads: %x\n", (unsigned long) task_pid_nr(current), (unsigned long) accessed_page, vmf->flags, vma_is_anonymous(vmf->vma), user, write, get_nr_threads(current));
 			wait_for_completion(&markings->unmarking_completed);
-
+			printk(KERN_ERR "Continue: %lx %lx\n", (unsigned long) task_pid_nr(current), (unsigned long) accessed_page);
 			down_read(&current->mm->mmap_sem);
 			lock_tocttou_mutex();
 
