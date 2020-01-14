@@ -105,12 +105,13 @@ __copy_to_user(void __user *to, const void *from, unsigned long n)
 	return raw_copy_to_user(to, from, n);
 }
 
+
 #ifdef CONFIG_TOCTTOU_PROTECTION
 extern void activate_page(struct page *page);
 
 void unlock_pages_from_page_frame(struct page *page);
 
-static inline __must_check void
+void
 _mark_user_pages_read_only(const void __user *from, unsigned long n);
 
 static inline __must_check unsigned long
@@ -177,52 +178,7 @@ void lock_tocttou_mutex(void);
 void unlock_tocttou_mutex(void);
 
 
-static inline __must_check unsigned long
-_copy_from_user_check(void *to, const void __user *from, unsigned long n)
-{
-	unsigned long res = n;
-	might_fault();
-	if (likely(access_ok(from, n))) {
-		kasan_check_write(to, n);
-		
-		if (!segment_eq(get_fs(), KERNEL_DS))
-			_mark_user_pages_read_only(from, n);
 
-		res = raw_copy_from_user(to, from, n);
-	}
-	if (unlikely(res))
-		memset(to + (n - res), 0, res);
-	return res;
-}
-
-static __always_inline unsigned long __must_check
-copy_from_user_check(void *to, const void __user *from, unsigned long n)
-{
-	if (likely(check_copy_size(to, n, false)))
-		n = _copy_from_user_check(to, from, n);
-	return n;
-}
-
-static inline __must_check  void
-_mark_user_pages_read_only(const void __user *from, unsigned long n)
-{
-	unsigned long address;
-	might_fault();
-	if (likely(access_ok(from, n))) {
-		
-		for (address = (unsigned long) from & PAGE_MASK; address < (unsigned long) from + n; address += PAGE_SIZE) {
-			/* Iterate through all pages and mark them as RO
-			 * Add the pages to the list of pages locked by this process
-			 * Save whether a page is RO */
-			if (!address) printk(KERN_ERR "from: %lx n: %lx\n", (unsigned long) from, n);
-			down_read(&current->mm->mmap_sem);
-			lock_page_from_va(address);
-			up_read(&current->mm->mmap_sem);
-		}
-		current->tocttou_syscall = 1;
-	}
-
-}
 //#else
 //extern __must_check unsigned long
 //_copy_from_user_check(void *, const void __user *, unsigned long);
@@ -236,13 +192,8 @@ int remove_vma_from_markings(struct tocttou_page_data *markings, struct vm_area_
 int substitute_vma_in_markings(struct tocttou_page_data *markings, struct vm_area_struct *old_vma, struct vm_area_struct *new_vma);
 struct permission_refs_node* find_vma_in_markings(struct tocttou_page_data *markings, struct vm_area_struct *vma);
 
-static __always_inline unsigned long __must_check
-copy_from_user(void *to, const void __user *from, unsigned long n)
-{
-	if (likely(check_copy_size(to, n, false)))
-		n = _copy_from_user_check(to, from, n);
-	return n;
-}
+unsigned long
+copy_from_user(void *to, const void __user *from, unsigned long n);
 
 static __always_inline unsigned long __must_check
 copy_to_user(void __user *to, const void *from, unsigned long n)

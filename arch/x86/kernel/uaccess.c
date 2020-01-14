@@ -8,6 +8,57 @@
 #include <linux/mm.h>
 #include "../../mm/internal.h"
 
+static inline __must_check unsigned long
+_copy_from_user_check(void *to, const void __user *from, unsigned long n)
+{
+	unsigned long res = n;
+	might_fault();
+	if (likely(access_ok(from, n))) {
+		mm_segment_t usr_seg = USER_DS;
+		kasan_check_write(to, n);
+		
+		if (!__chk_range_not_ok((unsigned long) from, n, (unsigned long) usr_seg.seg))
+			_mark_user_pages_read_only(from, n);
+
+		res = raw_copy_from_user(to, from, n);
+	}
+	if (unlikely(res))
+		memset(to + (n - res), 0, res);
+	return res;
+}
+
+
+void
+_mark_user_pages_read_only(const void __user *from, unsigned long n)
+{
+	unsigned long address;
+	might_fault();
+	if (likely(access_ok(from, n))) {
+		
+		for (address = (unsigned long) from & PAGE_MASK; address < (unsigned long) from + n; address += PAGE_SIZE) {
+			/* Iterate through all pages and mark them as RO
+			 * Add the pages to the list of pages locked by this process
+			 * Save whether a page is RO */
+			if (!address) printk(KERN_ERR "from: %lx n: %lx\n", (unsigned long) from, n);
+			down_read(&current->mm->mmap_sem);
+			lock_page_from_va(address);
+			up_read(&current->mm->mmap_sem);
+		}
+		current->tocttou_syscall = 1;
+	}
+
+}
+
+unsigned long
+copy_from_user(void *to, const void __user *from, unsigned long n)
+{
+	if (likely(check_copy_size(to, n, false)))
+		n = _copy_from_user_check(to, from, n);
+	return n;
+}
+EXPORT_SYMBOL(copy_from_user);
+
+
 #ifdef CONFIG_TOCTTOU_PROTECTION
 
 struct mutex tocttou_global_mutex;
@@ -73,10 +124,20 @@ static bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
 		struct permission_refs_node *iter;
 		pte_t * ppte = pvmw.pte;
 
-		if (pte_user(*ppte)) continue;
+		// Implement R and S unmarking 
 
-		set_pte_at(vma->vm_mm, pvmw.address, pvmw.pte, pte_mkuser(*pvmw.pte));
+		unsigned smarked = !pte_user(*ppte);
+		unsigned rmarked = !pte_rmarked(*ppte);
+		
+		if (!smarked && !rmarked) continue;
 
+		if (smarked) {
+		// TO DO: Take PTE lock
+			set_pte_at(vma->vm_mm, pvmw.address, pvmw.pte, pte_mkuser(*pvmw.pte));
+		} else if (rmarked) {
+			pte_t temp = pte_rtos_mark(*pvmw.pte);
+			set_pte_at(vma->vm_mm, pvmw.address, pvmw.pte, pte_mkuser(temp));
+		}
 		// Flush the TLB for every page
 		//
 		flush_tlb_page(vma, address);
@@ -111,8 +172,8 @@ void lock_page_from_va(unsigned long vaddr)
 	//
 
 retry:
-    if (retried) {
-		BUG();
+    if (retried == 2) {
+		//BUG();
 		return;
 	}
 
@@ -120,7 +181,7 @@ retry:
 	if (!pgd_present(*pgd)) {
 		printk(KERN_ERR "Retry: %lx %lx\n", (unsigned long) task_pid_nr(current), vaddr);
 		mm_populate(vaddr, PAGE_SIZE);
-		retried = 1;
+		retried += 1;
 		goto retry;
 	}
 		
@@ -129,7 +190,7 @@ retry:
 	if (!p4d_present(*p4d)) {
 		printk(KERN_ERR "Retry: %lx %lx\n", (unsigned long) task_pid_nr(current), vaddr);
 		mm_populate(vaddr, PAGE_SIZE);
-		retried = 1;
+		retried += 1;
 		goto retry;
 	}
 
@@ -137,7 +198,7 @@ retry:
 	if (!pud_present(*pud)) {
 		printk(KERN_ERR "Retry: %lx %lx\n", (unsigned long) task_pid_nr(current), vaddr);
 		mm_populate(vaddr, PAGE_SIZE);
-		retried = 1;
+		retried += 1;
 		goto retry;
 	}
 
@@ -145,7 +206,7 @@ retry:
 	if (!pmd_present(*pmd)) {
 		printk(KERN_ERR "Retry: %lx %lx\n", (unsigned long) task_pid_nr(current), vaddr);
 		mm_populate(vaddr, PAGE_SIZE);
-		retried = 1;
+		retried += 1;
 		goto retry;
 	}
 
@@ -154,7 +215,7 @@ retry:
 		pte_unmap(ptep);
 		printk(KERN_ERR "Retry: %lx %lx\n", (unsigned long) task_pid_nr(current), vaddr);
 		mm_populate(vaddr, PAGE_SIZE);
-		retried = 1;
+		retried += 1;
 		goto retry;
 	}
 
@@ -195,6 +256,7 @@ retry:
 		target_page->markings = kmalloc(sizeof(*target_page->markings), GFP_KERNEL);
 		INIT_TOCTTOU_PAGE_DATA(target_page->markings);
 		SetPageTocttou(target_page);
+		target_page->markings->op_code = current->op_code;
 
 		// Iterate through other pages and mark them
 		total = 0;
@@ -206,6 +268,7 @@ retry:
 			rmap_walk(target_page, &rwc);
 		} else {
 			set_pte_at(current->mm, vaddr, ptep, pte_userprotect(*ptep));
+			pte_unmap(ptep);
 		}
 	}
 	markings = target_page->markings;

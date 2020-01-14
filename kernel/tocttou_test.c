@@ -9,7 +9,7 @@ SYSCALL_DEFINE1(tocttou_test, long __user *, arg)
     long check_copy;
     long working_copy;
 
-    copy_from_user_check(&check_copy, arg, sizeof(long));
+    copy_from_user(&check_copy, arg, sizeof(long));
 
     if (!check_copy) {
         copy_from_user_unlock(arg, sizeof(long));
@@ -29,7 +29,7 @@ SYSCALL_DEFINE1(tocttou_lock, long __user *, arg)
     struct kernel_clone_args args = {
 		.exit_signal = SIGCHLD,
 	};
-    copy_from_user_check(&check_copy, arg, sizeof(long));
+    copy_from_user(&check_copy, arg, sizeof(long));
     
 	return _do_fork(&args);
 }

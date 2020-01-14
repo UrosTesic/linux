@@ -1194,9 +1194,15 @@ access_error(unsigned long error_code, struct vm_area_struct *vma)
 		return 0;
 	}
 
+	if (error_code == 5)
+		printk(KERN_ERR "Before: %lx", vma->vm_page_prot.pgprot & _PAGE_USER);
 	/* read, present: */
-	if (unlikely(error_code & X86_PF_PROT))
+	/* We stop reads targeting the kernel */
+	if (unlikely((error_code & X86_PF_PROT) && !(vma->vm_page_prot.pgprot & _PAGE_USER)))
 		return 1;
+
+	if (error_code == 5)
+		printk(KERN_ERR "Before: %lx", vma->vm_page_prot.pgprot & _PAGE_USER);
 
 	/* read, not present: */
 	if (unlikely(!(vma->vm_flags & (VM_READ | VM_EXEC | VM_WRITE))))
@@ -1292,6 +1298,8 @@ void do_user_addr_fault(struct pt_regs *regs,
 	tsk = current;
 	mm = tsk->mm;
 
+	if (hw_error_code == 5)
+		printk(KERN_ERR "PAGE FAULT: %lx %lx\n", hw_error_code, address);
 	/* kprobes don't want to hook the spurious faults: */
 	if (unlikely(kprobe_page_fault(regs, X86_TRAP_PF)))
 		return;
@@ -1366,7 +1374,6 @@ void do_user_addr_fault(struct pt_regs *regs,
 			return;
 	}
 #endif
-
 	/*
 	 * Kernel-mode access to the user address space should only occur
 	 * on well-defined single instructions listed in the exception
@@ -1420,11 +1427,15 @@ retry:
 	 * we can handle it..
 	 */
 good_area:
+	if (hw_error_code == 5)
+		printk(KERN_ERR "PAGE FAULT BEFORE CHECK: %lx %lx\n", hw_error_code, address);
 	if (unlikely(access_error(hw_error_code, vma))) {
 		bad_area_access_error(regs, hw_error_code, address, vma);
 		return;
 	}
 
+	if (hw_error_code == 5)
+		printk(KERN_ERR "PAGE FAULT AFTER CHECK: %lx %lx\n", hw_error_code, address);
 	/*
 	 * If for any reason at all we couldn't handle the fault,
 	 * make sure we exit gracefully rather than endlessly redo
@@ -1439,6 +1450,9 @@ good_area:
 	 * FAULT_FLAG_USER|FAULT_FLAG_KILLABLE are both set in flags.
 	 */
 	fault = handle_mm_fault(vma, address, flags);
+	if (fault & VM_FAULT_PROTECTION) 
+		bad_area_access_error(regs, hw_error_code, address, vma);
+
 	major |= fault & VM_FAULT_MAJOR;
 
 	/*

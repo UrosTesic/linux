@@ -75,6 +75,7 @@ struct permission_refs_node
 
 struct tocttou_page_data
 {
+	unsigned long op_code;
 	unsigned owners;
 	unsigned guests;
 	struct completion unmarking_completed;
@@ -83,6 +84,7 @@ struct tocttou_page_data
 
 static inline void INIT_TOCTTOU_PAGE_DATA(struct tocttou_page_data *data)
 {
+	data->op_code = 0;
 	data->owners = 0;
 	data->guests = 0;
 	init_completion(&data->unmarking_completed);
@@ -711,6 +713,7 @@ enum vm_fault_reason {
 	VM_FAULT_FALLBACK       = (__force vm_fault_t)0x000800,
 	VM_FAULT_DONE_COW       = (__force vm_fault_t)0x001000,
 	VM_FAULT_NEEDDSYNC      = (__force vm_fault_t)0x002000,
+	VM_FAULT_PROTECTION		= (__force vm_fault_t)0x004000,
 	VM_FAULT_HINDEX_MASK    = (__force vm_fault_t)0x0f0000,
 };
 
@@ -735,7 +738,8 @@ enum vm_fault_reason {
 	{ VM_FAULT_RETRY,               "RETRY" },	\
 	{ VM_FAULT_FALLBACK,            "FALLBACK" },	\
 	{ VM_FAULT_DONE_COW,            "DONE_COW" },	\
-	{ VM_FAULT_NEEDDSYNC,           "NEEDDSYNC" }
+	{ VM_FAULT_NEEDDSYNC,           "NEEDDSYNC" },	\
+	{ VM_FAULT_PROTECTION,			"PROTECTION"}
 
 struct vm_special_mapping {
 	const char *name;	/* The name, e.g. "[vdso]". */

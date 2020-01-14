@@ -3897,25 +3897,64 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 	if (!pte_present(vmf->orig_pte))
 		return do_swap_page(vmf);
 
+
 	accessed_page = pte_page(vmf->orig_pte);
-	unsigned user = pte_user(vmf->orig_pte);
+	unsigned smarked = !pte_user(vmf->orig_pte);
+	unsigned rmarked = !pte_rmarked(vmf->orig_pte);
 	unsigned write = pte_write(vmf->orig_pte);
 
-	if (accessed_page->markings && !user) {
+	if ((vmf->flags & FAULT_FLAG_PROTECTION) && !(vmf->flags & FAULT_FLAG_WRITE) && !(vmf->flags & FAULT_FLAG_USER) && !rmarked)
+		return VM_FAULT_PROTECTION;
+
+	// We wait if the page is marked
+	if (accessed_page->markings && (smarked || rmarked)) {
 		struct tocttou_page_data *markings;
-		pte_unmap(vmf->orig_pte);
+
+		
+		
 		lock_tocttou_mutex();
 
 		markings = READ_ONCE(accessed_page->markings);
 
 		if (!accessed_page->markings) {
+			pte_unmap(vmf->pte);
 			unlock_tocttou_mutex();
 		} else {
+
+			// If we are in user-mode, and we try to read from an S-marked page
+			// we will convert it to an R-marked page an continue with the read
+			//
+			// Actual reads of the kernel memory get caught earlier
+			//
+			if ((vmf->flags & FAULT_FLAG_USER) && !(vmf->flags & FAULT_FLAG_WRITE) && smarked) {
+				pte_t temp = pte_stor_mark(vmf->orig_pte);
+				set_pte_at(vmf->vma->vm_mm, vmf->address, vmf->pte, temp);
+				pte_unmap(vmf->pte);
+				unlock_tocttou_mutex();
+				return VM_FAULT_MAJOR;
+			}
+
+			// If we are in kernel-mode, and we are trying to write to an R-marked page
+			// we will convert it to an S-marked page and continue with the write
+			//
+			// If the write isn't actually allowed, we will refault and issue a SEGFAULT
+			//
+			if (!(vmf->flags & FAULT_FLAG_USER) && rmarked && (vmf->flags & FAULT_FLAG_WRITE)) {
+				pte_t temp = pte_rtos_mark(vmf->orig_pte);
+				set_pte_at(vmf->vma->vm_mm, vmf->address, vmf->pte, temp);
+				pte_unmap(vmf->pte);
+				unlock_tocttou_mutex();
+				return VM_FAULT_MAJOR;
+			}
+
+
+
+			pte_unmap(vmf->pte);
 			markings->guests++;
 
 			up_read(&current->mm->mmap_sem);
 			unlock_tocttou_mutex();
-			printk(KERN_ERR "Wait: PID: %lx Page: %lx Flags: %x Anonymous: %x PTE user: %x PTE write: %x No threads: %x\n", (unsigned long) task_pid_nr(current), (unsigned long) accessed_page, vmf->flags, vma_is_anonymous(vmf->vma), user, write, get_nr_threads(current));
+			printk(KERN_ERR "Wait: PID: %lx Page: %lx Flags: %x Anonymous: %x PTE user: %x PTE write: %x No threads: %x Op code: %ld\n", (unsigned long) task_pid_nr(current), (unsigned long) accessed_page, vmf->flags, vma_is_anonymous(vmf->vma), (unsigned) !smarked, write, get_nr_threads(current), markings->op_code);
 			wait_for_completion(&markings->unmarking_completed);
 			printk(KERN_ERR "Continue: %lx %lx\n", (unsigned long) task_pid_nr(current), (unsigned long) accessed_page);
 			down_read(&current->mm->mmap_sem);
@@ -4087,6 +4126,9 @@ vm_fault_t handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
 		ret = hugetlb_fault(vma->vm_mm, vma, address, flags);
 	else
 		ret = __handle_mm_fault(vma, address, flags);
+
+	if (ret & VM_FAULT_PROTECTION)
+		return ret;
 
 	if (flags & FAULT_FLAG_USER) {
 		mem_cgroup_exit_user_fault();
