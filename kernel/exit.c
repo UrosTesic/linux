@@ -780,6 +780,7 @@ void __noreturn do_exit(long code)
 		preempt_count_set(PREEMPT_ENABLED);
 	}
 
+	unlock_marked_pages();
 	/* sync mm's RSS info before statistics gathering */
 	if (tsk->mm)
 		sync_mm_rss(tsk->mm);

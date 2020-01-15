@@ -186,7 +186,7 @@ static inline int pte_write(pte_t pte)
 
 static inline int pte_rmarked(pte_t pte)
 {
-	return pte_flags(pte) & _PAGE_SOFTW1;
+	return pte_flags(pte) & _PAGE_SOFTW4;
 }
 
 static inline int pte_savedwrite(pte_t pte)
@@ -402,7 +402,7 @@ static inline pte_t pte_mkdevmap(pte_t pte)
 
 static inline pte_t pte_stor_mark(pte_t pte)
 {
-	pte_t temp = pte_set_flags(pte, _PAGE_USER | _PAGE_SOFTW1);
+	pte_t temp = pte_set_flags(pte, _PAGE_USER | _PAGE_SOFTW4);
 	if (pte_write(pte)) {
 		temp = pte_set_flags(temp, _PAGE_SOFTW2);
 	}
@@ -412,7 +412,7 @@ static inline pte_t pte_stor_mark(pte_t pte)
 
 static inline pte_t pte_rtos_mark(pte_t pte)
 {
-	pte_t temp = pte_clear_flags(pte, _PAGE_USER | _PAGE_SOFTW1);
+	pte_t temp = pte_clear_flags(pte, _PAGE_USER | _PAGE_SOFTW4);
 	if (pte_savedwrite(pte)) {
 		temp = pte_set_flags(temp, _PAGE_RW);
 		temp = pte_clear_flags(temp, _PAGE_SOFTW2);

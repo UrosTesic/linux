@@ -32,6 +32,11 @@ void
 _mark_user_pages_read_only(const void __user *from, unsigned long n)
 {
 	unsigned long address;
+	switch (current->op_code) {
+		case __NR_write:
+		case __NR_futex:
+			return;
+	}
 	might_fault();
 	if (likely(access_ok(from, n))) {
 		
@@ -166,6 +171,7 @@ void lock_page_from_va(unsigned long vaddr)
 		.arg = (void *)&total,
 		.anon_lock = page_lock_anon_vma_read,
 	};
+
 
 	// Page walk to find the page frame
 	// TO DO: Replace with the visitor

@@ -305,6 +305,10 @@ __visible void do_syscall_64(unsigned long nr, struct pt_regs *regs)
 	}
 
 	unlock_marked_pages();
+#ifdef CONFIG_TOCTTOU_PROTECTION
+	current->tocttou_syscall = 0;
+	current->op_code = -1;
+#endif
 
 	syscall_return_slowpath(regs);
 }
