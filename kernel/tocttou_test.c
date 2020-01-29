@@ -2,6 +2,11 @@
 #include <linux/linkage.h>
 #include <linux/syscalls.h>
 #include <linux/uaccess.h>
+#include <linux/delay.h>
+
+#define FILTERED_ARGUMENT 0
+#define LEGAL_ARGUMENT 1
+#define ILLEGAL_ARGUMENT -1
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
 SYSCALL_DEFINE1(tocttou_test, long __user *, arg)
@@ -12,15 +17,16 @@ SYSCALL_DEFINE1(tocttou_test, long __user *, arg)
     copy_from_user(&check_copy, arg, sizeof(long));
 
     if (!check_copy) {
-        copy_from_user_unlock(arg, sizeof(long));
-        return 0;
+        return FILTERED_ARGUMENT;
     }
+
+    ssleep(10);
 
     copy_from_user(&working_copy, arg, sizeof(long));
     if (!working_copy)
-        return -1;
+        return ILLEGAL_ARGUMENT;
     else
-        return 1;
+        return LEGAL_ARGUMENT;
 }
 
 SYSCALL_DEFINE1(tocttou_lock, long __user *, arg)

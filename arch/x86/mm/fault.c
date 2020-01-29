@@ -1194,19 +1194,17 @@ access_error(unsigned long error_code, struct vm_area_struct *vma)
 		return 0;
 	}
 
-	if (error_code == 5)
-		printk(KERN_ERR "Before: %lx", vma->vm_page_prot.pgprot & _PAGE_USER);
+
 	/* read, present: */
 	/* We stop reads targeting the kernel */
 	if (unlikely((error_code & X86_PF_PROT) && !(vma->vm_page_prot.pgprot & _PAGE_USER)))
 		return 1;
 
-	if (error_code == 5)
-		printk(KERN_ERR "Before: %lx", vma->vm_page_prot.pgprot & _PAGE_USER);
+
 
 	/* read, not present: */
-	if (unlikely(!(vma->vm_flags & (VM_READ | VM_EXEC | VM_WRITE))))
-		return 1;
+	/*if (unlikely(!(vma->vm_flags & (VM_READ | VM_EXEC | VM_WRITE))))
+		return 1;*/
 
 	return 0;
 }
@@ -1293,13 +1291,13 @@ void do_user_addr_fault(struct pt_regs *regs,
 	struct task_struct *tsk;
 	struct mm_struct *mm;
 	vm_fault_t fault, major = 0;
-	unsigned int flags = FAULT_FLAG_ALLOW_RETRY | FAULT_FLAG_KILLABLE;
+	unsigned int flags = FAULT_FLAG_ALLOW_RETRY | FAULT_FLAG_KILLABLE | FAULT_FLAG_DO_TOCTTOU;
 
 	tsk = current;
 	mm = tsk->mm;
 
-	if (hw_error_code == 5)
-		printk(KERN_ERR "PAGE FAULT: %lx %lx\n", hw_error_code, address);
+	//if (hw_error_code == 5)
+		//printk(KERN_ERR "PAGE FAULT: %lx %lx\n", hw_error_code, address);
 	/* kprobes don't want to hook the spurious faults: */
 	if (unlikely(kprobe_page_fault(regs, X86_TRAP_PF)))
 		return;
@@ -1427,15 +1425,15 @@ retry:
 	 * we can handle it..
 	 */
 good_area:
-	if (hw_error_code == 5)
-		printk(KERN_ERR "PAGE FAULT BEFORE CHECK: %lx %lx\n", hw_error_code, address);
+	//if (hw_error_code == 5)
+		//printk(KERN_ERR "PAGE FAULT BEFORE CHECK: %lx %lx\n", hw_error_code, address);
 	if (unlikely(access_error(hw_error_code, vma))) {
 		bad_area_access_error(regs, hw_error_code, address, vma);
 		return;
 	}
 
-	if (hw_error_code == 5)
-		printk(KERN_ERR "PAGE FAULT AFTER CHECK: %lx %lx\n", hw_error_code, address);
+	//if (hw_error_code == 5)
+		//printk(KERN_ERR "PAGE FAULT AFTER CHECK: %lx %lx\n", hw_error_code, address);
 	/*
 	 * If for any reason at all we couldn't handle the fault,
 	 * make sure we exit gracefully rather than endlessly redo

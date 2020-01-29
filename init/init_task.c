@@ -183,6 +183,7 @@ struct task_struct init_task
 #endif
 #ifdef CONFIG_TOCTTOU_PROTECTION
 	.tocttou_syscall = 0,
+	.tocttou_mutex_taken = 0,
 	.marked_pages_list = LIST_HEAD_INIT(init_task.marked_pages_list),
 #endif
 };

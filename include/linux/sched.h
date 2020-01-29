@@ -1277,6 +1277,7 @@ struct task_struct {
 #ifdef CONFIG_TOCTTOU_PROTECTION
 	long op_code;
 	unsigned tocttou_syscall;
+	unsigned tocttou_mutex_taken;
 	struct list_head marked_pages_list;
 #endif
 

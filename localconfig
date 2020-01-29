@@ -1,0 +1,82 @@
+Module                  Size  Used by
+9p                     61440  1
+fscache               372736  1 9p
+intel_rapl_msr         20480  0
+intel_rapl_common      24576  1 intel_rapl_msr
+kvm_intel             282624  0
+kvm                   651264  1 kvm_intel
+snd_hda_codec_generic    81920  1
+ledtrig_audio          16384  1 snd_hda_codec_generic
+snd_hda_intel          49152  0
+snd_intel_nhlt         20480  1 snd_hda_intel
+irqbypass              16384  1 kvm
+snd_hda_codec         126976  2 snd_hda_codec_generic,snd_hda_intel
+snd_hda_core           90112  3 snd_hda_codec_generic,snd_hda_intel,snd_hda_codec
+snd_hwdep              20480  1 snd_hda_codec
+snd_pcm               110592  3 snd_hda_intel,snd_hda_codec,snd_hda_core
+9pnet_virtio           20480  1
+input_leds             16384  0
+snd_timer              36864  1 snd_pcm
+joydev                 24576  0
+serio_raw              20480  0
+9pnet                  77824  2 9p,9pnet_virtio
+snd                    86016  6 snd_hda_codec_generic,snd_hwdep,snd_hda_intel,snd_hda_codec,snd_timer,snd_pcm
+lpc_ich                24576  0
+soundcore              16384  1 snd
+qemu_fw_cfg            20480  0
+mac_hid                16384  0
+sch_fq_codel           20480  2
+ib_iser                53248  0
+rdma_cm                61440  1 ib_iser
+iw_cm                  49152  1 rdma_cm
+ib_cm                  57344  1 rdma_cm
+ib_core               303104  4 rdma_cm,iw_cm,ib_iser,ib_cm
+iscsi_tcp              24576  0
+libiscsi_tcp           32768  1 iscsi_tcp
+libiscsi               57344  3 libiscsi_tcp,iscsi_tcp,ib_iser
+scsi_transport_iscsi   110592  4 libiscsi_tcp,iscsi_tcp,ib_iser,libiscsi
+virtio_rng             16384  0
+ip_tables              28672  0
+x_tables               40960  1 ip_tables
+autofs4                45056  2
+btrfs                1253376  0
+zstd_compress         167936  1 btrfs
+raid10                 57344  0
+raid456               155648  0
+async_raid6_recov      24576  1 raid456
+async_memcpy           20480  2 raid456,async_raid6_recov
+async_pq               24576  2 raid456,async_raid6_recov
+async_xor              20480  3 async_pq,raid456,async_raid6_recov
+async_tx               20480  5 async_pq,async_memcpy,async_xor,raid456,async_raid6_recov
+xor                    24576  2 async_xor,btrfs
+raid6_pq              114688  4 async_pq,btrfs,raid456,async_raid6_recov
+libcrc32c              16384  2 btrfs,raid456
+raid1                  45056  0
+raid0                  24576  0
+multipath              20480  0
+linear                 20480  0
+crct10dif_pclmul       16384  1
+crc32_pclmul           16384  0
+ghash_clmulni_intel    16384  0
+qxl                    61440  0
+hid_generic            16384  0
+usbhid                 57344  0
+ttm                   106496  1 qxl
+hid                   131072  2 usbhid,hid_generic
+drm_kms_helper        176128  3 qxl
+aesni_intel           372736  0
+syscopyarea            16384  1 drm_kms_helper
+sysfillrect            16384  1 drm_kms_helper
+sysimgblt              16384  1 drm_kms_helper
+fb_sys_fops            16384  1 drm_kms_helper
+crypto_simd            16384  1 aesni_intel
+drm                   516096  4 drm_kms_helper,qxl,ttm
+virtio_net             53248  0
+cryptd                 24576  2 crypto_simd,ghash_clmulni_intel
+glue_helper            16384  1 aesni_intel
+psmouse               155648  0
+ahci                   40960  0
+net_failover           20480  1 virtio_net
+libahci                32768  1 ahci
+virtio_blk             20480  2
+failover               16384  1 net_failover

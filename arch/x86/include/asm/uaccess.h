@@ -163,19 +163,7 @@ __typeof__(__builtin_choose_expr(sizeof(x) > sizeof(0UL), 0ULL, 0UL))
  * Clang/LLVM cares about the size of the register, but still wants
  * the base register for something that ends up being a pair.
  */
-#define get_user(x, ptr)						\
-({									\
-	int __ret_gu;							\
-	register __inttype(*(ptr)) __val_gu asm("%"_ASM_DX);		\
-	__chk_user_ptr(ptr);						\
-	might_fault();							\
-	asm volatile("call __get_user_%P4"				\
-		     : "=a" (__ret_gu), "=r" (__val_gu),		\
-			ASM_CALL_CONSTRAINT				\
-		     : "0" (ptr), "i" (sizeof(*(ptr))));		\
-	(x) = (__force __typeof__(*(ptr))) __val_gu;			\
-	__builtin_expect(__ret_gu, 0);					\
-})
+#define get_user(x, ptr) (copy_from_user(&x, ptr, sizeof(x)) == 0 ? 0 : -EFAULT)
 
 #define __put_user_x(size, x, ptr, __ret_pu)			\
 	asm volatile("call __put_user_" #size : "=a" (__ret_pu)	\

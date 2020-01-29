@@ -1057,7 +1057,7 @@ again:
 			if (unlikely(!page))
 				continue;
 
-			markings = READ_ONCE(page->markings);
+			/*markings = READ_ONCE(page->markings);
 			if (markings) {
 				lock_tocttou_mutex();
 
@@ -1066,7 +1066,7 @@ again:
 					remove_vma_from_markings(markings, vma);
 				}
 				unlock_tocttou_mutex();
-			}
+			}*/
 			
 
 			if (!PageAnon(page)) {
@@ -3308,46 +3308,50 @@ vm_fault_t alloc_set_pte(struct vm_fault *vmf, struct mem_cgroup *memcg,
 			return ret;
 	}
 
+	/*markings = READ_ONCE(page->markings);
+	if (markings)
+		lock_tocttou_mutex();*/
+
 	if (!vmf->pte) {
 		ret = pte_alloc_one_map(vmf);
-		if (ret)
+		if (ret) {
+
 			return ret;
+		}	
 	}
 
 	/* Re-check under ptl */
 	if (unlikely(!pte_none(*vmf->pte)))
-		return VM_FAULT_NOPAGE;
+	{
 
+		return VM_FAULT_NOPAGE;
+	}
 	flush_icache_page(vma, page);
 	entry = mk_pte(page, vma->vm_page_prot);
 	if (write)
 		entry = maybe_mkwrite(pte_mkdirty(entry), vma);
 	/* copy-on-write page */
 	if (write && !(vma->vm_flags & VM_SHARED)) {
+
 		inc_mm_counter_fast(vma->vm_mm, MM_ANONPAGES);
 		page_add_new_anon_rmap(page, vma, vmf->address, false);
 		mem_cgroup_commit_charge(page, memcg, false, false);
 		lru_cache_add_active_or_unevictable(page, vma);
-	} else {
-		markings = READ_ONCE(page->markings);
+	} else {	
+		inc_mm_counter_fast(vma->vm_mm, mm_counter_file(page));
+		page_add_file_rmap(page, false);
 
-		if (markings) {
-			lock_tocttou_mutex();
-			markings = READ_ONCE(page->markings);
-			if (!markings) {
-				unlock_tocttou_mutex();
-			} else {
-				entry = pte_userprotect(entry);
-
-				inc_mm_counter_fast(vma->vm_mm, mm_counter_file(page));
-				page_add_file_rmap(page, false);
-				unlock_tocttou_mutex();
-			}
-		} else {
-			inc_mm_counter_fast(vma->vm_mm, mm_counter_file(page));
-			page_add_file_rmap(page, false);
-		}
 	}
+
+	/* The pte has already been added to the reverse mapping
+	 * If another thread wants to change the status of this page,
+	 * it will try to aquire PTL. Considering that we hold the PTL
+	 * that thread will wait, until we are finished with our marking.
+	 */
+	markings = READ_ONCE(page->markings);
+	if (markings)
+		entry = pte_userprotect(entry);
+
 	set_pte_at(vma->vm_mm, vmf->address, vmf->pte, entry);
 
 	/* no need to invalidate: a not-present page won't be cached */
@@ -3907,10 +3911,8 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 		return VM_FAULT_PROTECTION;
 
 	// We wait if the page is marked
-	if (accessed_page->markings && (smarked || rmarked)) {
+	if (accessed_page->markings && (smarked || rmarked) && (vmf->flags & FAULT_FLAG_DO_TOCTTOU)) {
 		struct tocttou_page_data *markings;
-
-		
 		
 		lock_tocttou_mutex();
 
@@ -3951,12 +3953,12 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 
 			pte_unmap(vmf->pte);
 			markings->guests++;
-
-			up_read(&current->mm->mmap_sem);
+			
 			unlock_tocttou_mutex();
-			printk(KERN_ERR "Wait: PID: %lx Page: %lx Flags: %x Anonymous: %x PTE user: %x PTE write: %x No threads: %x Op code: %ld\n", (unsigned long) task_pid_nr(current), (unsigned long) accessed_page, vmf->flags, vma_is_anonymous(vmf->vma), (unsigned) !smarked, write, get_nr_threads(current), markings->op_code);
+			up_read(&current->mm->mmap_sem);
+			//printk(KERN_ERR "Wait: PID: %lx Page: %lx Flags: %x Anonymous: %x PTE user: %x PTE write: %x No threads: %x Op code: %ld\n", (unsigned long) task_pid_nr(current), (unsigned long) accessed_page, vmf->flags, vma_is_anonymous(vmf->vma), (unsigned) !smarked, write, get_nr_threads(current), markings->op_code);
 			wait_for_completion(&markings->unmarking_completed);
-			printk(KERN_ERR "Continue: %lx %lx\n", (unsigned long) task_pid_nr(current), (unsigned long) accessed_page);
+			//printk(KERN_ERR "Continue: %lx %lx\n", (unsigned long) task_pid_nr(current), (unsigned long) accessed_page);
 			down_read(&current->mm->mmap_sem);
 			lock_tocttou_mutex();
 

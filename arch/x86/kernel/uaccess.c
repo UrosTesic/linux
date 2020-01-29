@@ -1,6 +1,6 @@
 #include <linux/sched.h>
 #include <linux/page-flags.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <asm/pgtable.h>
 #include <asm/tlbflush.h>
 #include <linux/slab.h>
@@ -32,9 +32,15 @@ void
 _mark_user_pages_read_only(const void __user *from, unsigned long n)
 {
 	unsigned long address;
+	if (current->flags & PF_EXITING) {
+		return;
+	}
 	switch (current->op_code) {
 		case __NR_write:
 		case __NR_futex:
+		case __NR_poll:
+		case __NR_select:
+		case __NR_execve:
 			return;
 	}
 	might_fault();
@@ -44,9 +50,11 @@ _mark_user_pages_read_only(const void __user *from, unsigned long n)
 			/* Iterate through all pages and mark them as RO
 			 * Add the pages to the list of pages locked by this process
 			 * Save whether a page is RO */
-			if (!address) printk(KERN_ERR "from: %lx n: %lx\n", (unsigned long) from, n);
+			//if (!address) printk(KERN_ERR "from: %lx n: %lx\n", (unsigned long) from, n);
 			down_read(&current->mm->mmap_sem);
+
 			lock_page_from_va(address);
+
 			up_read(&current->mm->mmap_sem);
 		}
 		current->tocttou_syscall = 1;
@@ -67,22 +75,32 @@ EXPORT_SYMBOL(copy_from_user);
 #ifdef CONFIG_TOCTTOU_PROTECTION
 
 struct mutex tocttou_global_mutex;
+//static spinlock_t tocttou_lock;
+//static struct semaphore tocttou_sem;
 
 void inline init_tocttou_mutex()
 {
 	mutex_init(&tocttou_global_mutex);
+	// spin_lock_init(&tocttou_lock);
+	//sema_init(&tocttou_sem, 1);
 }
 EXPORT_SYMBOL(init_tocttou_mutex);
 
 void inline lock_tocttou_mutex()
 {
-	mutex_lock(&tocttou_global_mutex);
+	if (!current->tocttou_mutex_taken) {
+		mutex_lock(&tocttou_global_mutex);
+		current->tocttou_mutex_taken = 1;
+	}
 }
 EXPORT_SYMBOL(lock_tocttou_mutex);
 
 void inline unlock_tocttou_mutex()
 {
-	mutex_unlock(&tocttou_global_mutex);
+	if (current->tocttou_mutex_taken) {
+		mutex_unlock(&tocttou_global_mutex);
+		current->tocttou_mutex_taken = 0;
+	}
 }
 EXPORT_SYMBOL(unlock_tocttou_mutex);
 
@@ -106,7 +124,7 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
 		// Flush the TLB for every page
 		//
 		flush_tlb_page(vma, address);
-		barrier();
+		update_mmu_cache(vma, address, ppte);
 	}
 	return true;
 }
@@ -114,6 +132,8 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
 static bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
 		     unsigned long address, void *arg)
 {
+	pte_t entry;
+	spinlock_t *ptl;
 	struct tocttou_page_data *markings = page->markings;
 	struct page_vma_mapped_walk pvmw = {
 		.page = page,
@@ -131,22 +151,23 @@ static bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
 
 		// Implement R and S unmarking 
 
-		unsigned smarked = !pte_user(*ppte);
-		unsigned rmarked = !pte_rmarked(*ppte);
+		entry = READ_ONCE(*ppte);
+		unsigned smarked = !pte_user(entry);
+		unsigned rmarked = !pte_rmarked(entry);
 		
-		if (!smarked && !rmarked) continue;
-
+		if (!smarked && !rmarked) {
+			continue;
+		}
 		if (smarked) {
-		// TO DO: Take PTE lock
-			set_pte_at(vma->vm_mm, pvmw.address, pvmw.pte, pte_mkuser(*pvmw.pte));
+			set_pte_at(vma->vm_mm, pvmw.address, pvmw.pte, pte_mkuser(entry));
 		} else if (rmarked) {
 			pte_t temp = pte_rtos_mark(*pvmw.pte);
-			set_pte_at(vma->vm_mm, pvmw.address, pvmw.pte, pte_mkuser(temp));
+			set_pte_at(vma->vm_mm, pvmw.address, pvmw.pte, pte_mkuser(entry));
 		}
 		// Flush the TLB for every page
 		//
 		flush_tlb_page(vma, address);
-		barrier();
+		update_mmu_cache(vma, address, ppte);
 	}
 	return true;
 }
@@ -163,6 +184,8 @@ void lock_page_from_va(unsigned long vaddr)
 	struct tocttou_marked_node *iter;
 	struct list_head *temp;
 	struct tocttou_page_data *markings;
+	struct vm_area_struct *vma;
+	pte_t entry;
 	unsigned total;
 	unsigned retried = 0;
 
@@ -172,10 +195,13 @@ void lock_page_from_va(unsigned long vaddr)
 		.anon_lock = page_lock_anon_vma_read,
 	};
 
-
+	vma = find_vma(current->mm, vaddr);
 	// Page walk to find the page frame
 	// TO DO: Replace with the visitor
 	//
+
+	if (!vma)
+		return;
 
 retry:
     if (retried == 2) {
@@ -185,8 +211,10 @@ retry:
 
     pgd = pgd_offset(current->mm, vaddr);
 	if (!pgd_present(*pgd)) {
-		printk(KERN_ERR "Retry: %lx %lx\n", (unsigned long) task_pid_nr(current), vaddr);
+		//printk(KERN_ERR "Retry: %lx %lx\n", (unsigned long) task_pid_nr(current), vaddr);
+		up_read(&current->mm->mmap_sem);
 		mm_populate(vaddr, PAGE_SIZE);
+		down_read(&current->mm->mmap_sem);
 		retried += 1;
 		goto retry;
 	}
@@ -194,24 +222,30 @@ retry:
 
 	p4d = p4d_offset(pgd, vaddr);
 	if (!p4d_present(*p4d)) {
-		printk(KERN_ERR "Retry: %lx %lx\n", (unsigned long) task_pid_nr(current), vaddr);
+		//printk(KERN_ERR "Retry: %lx %lx\n", (unsigned long) task_pid_nr(current), vaddr);
+		up_read(&current->mm->mmap_sem);
 		mm_populate(vaddr, PAGE_SIZE);
+		down_read(&current->mm->mmap_sem);
 		retried += 1;
 		goto retry;
 	}
 
 	pud = pud_offset(p4d, vaddr);
 	if (!pud_present(*pud)) {
-		printk(KERN_ERR "Retry: %lx %lx\n", (unsigned long) task_pid_nr(current), vaddr);
+		//printk(KERN_ERR "Retry: %lx %lx\n", (unsigned long) task_pid_nr(current), vaddr);
+		up_read(&current->mm->mmap_sem);
 		mm_populate(vaddr, PAGE_SIZE);
+		down_read(&current->mm->mmap_sem);
 		retried += 1;
 		goto retry;
 	}
 
 	pmd = pmd_offset(pud, vaddr);
 	if (!pmd_present(*pmd)) {
-		printk(KERN_ERR "Retry: %lx %lx\n", (unsigned long) task_pid_nr(current), vaddr);
+		//printk(KERN_ERR "Retry: %lx %lx\n", (unsigned long) task_pid_nr(current), vaddr);
+		up_read(&current->mm->mmap_sem);
 		mm_populate(vaddr, PAGE_SIZE);
+		down_read(&current->mm->mmap_sem);
 		retried += 1;
 		goto retry;
 	}
@@ -219,8 +253,10 @@ retry:
 	ptep = pte_offset_map(pmd, vaddr);
 	if (!pte_present(*ptep)) {
 		pte_unmap(ptep);
-		printk(KERN_ERR "Retry: %lx %lx\n", (unsigned long) task_pid_nr(current), vaddr);
+		//printk(KERN_ERR "Retry: %lx %lx\n", (unsigned long) task_pid_nr(current), vaddr);
+		up_read(&current->mm->mmap_sem);
 		mm_populate(vaddr, PAGE_SIZE);
+		down_read(&current->mm->mmap_sem);
 		retried += 1;
 		goto retry;
 	}
@@ -235,7 +271,7 @@ retry:
 
 	temp = &current->marked_pages_list;
 
-	if (!pte_user(*ptep)) {
+	if (!pte_user(*ptep) || pte_rmarked(*ptep)) {
 	// Check if we have already locked this page
 	//
 		list_for_each_entry(iter, temp, other_nodes) {
@@ -245,7 +281,10 @@ retry:
 		}
 	}
 
-	new_node = kmalloc(sizeof(*new_node), GFP_KERNEL);
+	if (!in_atomic())
+		new_node = kmalloc(sizeof(*new_node), GFP_KERNEL);
+	else
+		new_node = kmalloc(sizeof(*new_node), GFP_ATOMIC);
 
 	BUG_ON(!new_node);
 
@@ -259,7 +298,10 @@ retry:
 	//
 	if (!target_page->markings) {
 		//printk(KERN_ERR "Mark: %lx %lx\n", (unsigned long) task_pid_nr(current), (unsigned long) target_page);
-		target_page->markings = kmalloc(sizeof(*target_page->markings), GFP_KERNEL);
+		if (!in_atomic())
+			target_page->markings = kmalloc(sizeof(*target_page->markings), GFP_KERNEL);
+		else
+			target_page->markings = kmalloc(sizeof(*target_page->markings), GFP_ATOMIC);
 		INIT_TOCTTOU_PAGE_DATA(target_page->markings);
 		SetPageTocttou(target_page);
 		target_page->markings->op_code = current->op_code;
@@ -273,7 +315,15 @@ retry:
 			pte_unmap(ptep);
 			rmap_walk(target_page, &rwc);
 		} else {
-			set_pte_at(current->mm, vaddr, ptep, pte_userprotect(*ptep));
+			spinlock_t *ptl = pte_lockptr(current->mm, pmd);
+			spin_lock(ptl);
+			entry = READ_ONCE(*ptep);
+			if (!pte_user(entry) || !pte_rmarked(entry))
+				set_pte_at(current->mm, vaddr, ptep, pte_userprotect(entry));
+			spin_unlock(ptl);
+			flush_tlb_page(vma, vaddr);
+			update_mmu_cache(vma, vaddr, ptep);
+
 			pte_unmap(ptep);
 		}
 	}
