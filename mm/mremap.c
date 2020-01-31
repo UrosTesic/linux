@@ -174,33 +174,9 @@ static void move_ptes(struct vm_area_struct *vma, pmd_t *old_pmd,
 		 * the TLB entry for the old mapping has been
 		 * flushed.
 		 */
-		if (pte_present(pte)) {
+		if (pte_present(pte)) 
 			force_flush = true;
 
-			if (!pte_write(pte)) {
-				struct page *current_page = pte_page(pte);
-				struct tocttou_page_data *markings = READ_ONCE(current_page->markings);
-
-				if (markings) {
-					lock_tocttou_mutex();
-					markings = READ_ONCE(current_page->markings);
-
-					if (!markings) {
-						unlock_tocttou_mutex();
-					} else {
-						struct permission_refs_node *iter;
-						list_for_each_entry(iter, &markings->old_permissions_list, nodes) {
-							if (iter->vma == vma) {
-								iter->vma = new_vma;
-								break;
-							}
-						
-						}
-						unlock_tocttou_mutex();
-					}
-				}
-			}
-		}
 		pte = move_pte(pte, new_vma->vm_page_prot, old_addr, new_addr);
 		pte = move_soft_dirty_pte(pte);
 		set_pte_at(mm, new_addr, new_pte, pte);

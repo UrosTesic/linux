@@ -31,18 +31,11 @@ SYSCALL_DEFINE1(tocttou_test, long __user *, arg)
 
 SYSCALL_DEFINE1(tocttou_lock, long __user *, arg)
 {
-    long check_copy;
-    struct kernel_clone_args args = {
-		.exit_signal = SIGCHLD,
-	};
-    copy_from_user(&check_copy, arg, sizeof(long));
-    
-	return _do_fork(&args);
+    return 0;
 }
 
 SYSCALL_DEFINE1(tocttou_unlock, long __user *, arg)
 {
-    copy_from_user_unlock(arg, sizeof(long));
     return 0;
 }
 #else

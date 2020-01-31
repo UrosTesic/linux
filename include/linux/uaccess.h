@@ -106,7 +106,7 @@ __copy_to_user(void __user *to, const void *from, unsigned long n)
 }
 
 
-#ifdef CONFIG_TOCTTOU_PROTECTION
+
 extern void activate_page(struct page *page);
 
 void unlock_pages_from_page_frame(struct page *page);
@@ -114,24 +114,7 @@ void unlock_pages_from_page_frame(struct page *page);
 void
 _mark_user_pages_read_only(const void __user *from, unsigned long n);
 
-static inline __must_check unsigned long
-_copy_from_user(void *to, const void __user *from, unsigned long n)
-{
-	unsigned long res = n;
 
-	might_fault();
-
-	
-	if (likely(access_ok(from, n))) {
-		kasan_check_write(to, n);
-		res = raw_copy_from_user(to, from, n);
-
-	}
-	if (unlikely(res))
-		memset(to + (n - res), 0, res);
-	return res;
-}
-#else
 #ifdef INLINE_COPY_FROM_USER
 static inline __must_check unsigned long
 _copy_from_user(void *to, const void __user *from, unsigned long n)
@@ -150,7 +133,7 @@ _copy_from_user(void *to, const void __user *from, unsigned long n)
 extern __must_check unsigned long
 _copy_from_user(void *, const void __user *, unsigned long);
 #endif /* INLINE_COPY_FROM_USER */
-#endif /* CONFIG_TOCTTOU_PROTECTION */
+
 
 #ifdef INLINE_COPY_TO_USER
 static inline __must_check unsigned long
@@ -169,31 +152,37 @@ _copy_to_user(void __user *, const void *, unsigned long);
 #endif
 
 
-
-#ifdef CONFIG_TOCTTOU_PROTECTION
-
 void lock_page_from_va(unsigned long vaddr);
-void init_tocttou_mutex(void);
 void lock_tocttou_mutex(void);
 void unlock_tocttou_mutex(void);
-
-
-
-//#else
-//extern __must_check unsigned long
-//_copy_from_user_check(void *, const void __user *, unsigned long);
-//#endif /* INLINE_COPY_FROM_USER */
-
-extern void copy_from_user_unlock(const void __user *from, unsigned long n);
-#endif /* CONFIG_TOCTTOU_PROTECTION */
-
 void unlock_marked_pages(void);
-int remove_vma_from_markings(struct tocttou_page_data *markings, struct vm_area_struct *vma);
-int substitute_vma_in_markings(struct tocttou_page_data *markings, struct vm_area_struct *old_vma, struct vm_area_struct *new_vma);
-struct permission_refs_node* find_vma_in_markings(struct tocttou_page_data *markings, struct vm_area_struct *vma);
+void tocttou_mutex_init(void);
+void tocttou_cache_init(void);
+struct tocttou_page_data* tocttou_page_data_alloc(void);
+void tocttou_page_data_free(struct tocttou_page_data* data);
+struct tocttou_marked_node* tocttou_node_alloc(void);
+void tocttou_node_free(struct tocttou_marked_node* data);
 
-unsigned long
-copy_from_user(void *to, const void __user *from, unsigned long n);
+#ifdef CONFIG_TOCTTOU_PROTECTION
+__must_check unsigned long
+_copy_from_user_check(void *to, const void __user *from, unsigned long n);
+
+static __always_inline __must_check unsigned long
+copy_from_user(void *to, const void __user *from, unsigned long n)
+{
+	if (likely(check_copy_size(to, n, false)))
+		n = _copy_from_user_check(to, from, n);
+	return n;
+}
+#else
+static __always_inline __must_check unsigned long
+copy_from_user(void *to, const void __user *from, unsigned long n)
+{
+	if (likely(check_copy_size(to, n, false)))
+		n = _copy_from_user(to, from, n);
+	return n;
+}
+#endif
 
 static __always_inline unsigned long __must_check
 copy_to_user(void __user *to, const void *from, unsigned long n)

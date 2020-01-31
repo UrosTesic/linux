@@ -6756,10 +6756,11 @@ static void __init free_area_init_core(struct pglist_data *pgdat)
 {
 	enum zone_type j;
 	int nid = pgdat->node_id;
-
+#ifdef CONFIG_TOCTTOU_PROTECTION
+	tocttou_mutex_init();
+#endif
 	pgdat_init_internals(pgdat);
 	pgdat->per_cpu_nodestats = &boot_nodestats;
-	init_tocttou_mutex();
 
 	for (j = 0; j < MAX_NR_ZONES; j++) {
 		struct zone *zone = pgdat->node_zones + j;

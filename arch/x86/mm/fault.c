@@ -1195,16 +1195,22 @@ access_error(unsigned long error_code, struct vm_area_struct *vma)
 	}
 
 
+#ifdef CONFIG_TOCTTOU_PROTECTION
 	/* read, present: */
 	/* We stop reads targeting the kernel */
 	if (unlikely((error_code & X86_PF_PROT) && !(vma->vm_page_prot.pgprot & _PAGE_USER)))
 		return 1;
 
+#else
 
+	if (unlikely(error_code & X86_PF_PROT))
+		return 1;
 
 	/* read, not present: */
-	/*if (unlikely(!(vma->vm_flags & (VM_READ | VM_EXEC | VM_WRITE))))
-		return 1;*/
+	if (unlikely(!(vma->vm_flags & (VM_READ | VM_EXEC | VM_WRITE))))
+		return 1;
+		
+#endif
 
 	return 0;
 }

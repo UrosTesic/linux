@@ -8,7 +8,7 @@
 #include <linux/mm.h>
 #include "../../mm/internal.h"
 
-static inline __must_check unsigned long
+__must_check unsigned long
 _copy_from_user_check(void *to, const void __user *from, unsigned long n)
 {
 	unsigned long res = n;
@@ -26,6 +26,7 @@ _copy_from_user_check(void *to, const void __user *from, unsigned long n)
 		memset(to + (n - res), 0, res);
 	return res;
 }
+EXPORT_SYMBOL(_copy_from_user_check);
 
 
 void
@@ -50,7 +51,6 @@ _mark_user_pages_read_only(const void __user *from, unsigned long n)
 			/* Iterate through all pages and mark them as RO
 			 * Add the pages to the list of pages locked by this process
 			 * Save whether a page is RO */
-			//if (!address) printk(KERN_ERR "from: %lx n: %lx\n", (unsigned long) from, n);
 			down_read(&current->mm->mmap_sem);
 
 			lock_page_from_va(address);
@@ -62,47 +62,72 @@ _mark_user_pages_read_only(const void __user *from, unsigned long n)
 
 }
 
-unsigned long
-copy_from_user(void *to, const void __user *from, unsigned long n)
-{
-	if (likely(check_copy_size(to, n, false)))
-		n = _copy_from_user_check(to, from, n);
-	return n;
-}
-EXPORT_SYMBOL(copy_from_user);
-
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
 
 struct mutex tocttou_global_mutex;
-//static spinlock_t tocttou_lock;
-//static struct semaphore tocttou_sem;
+void *tocttou_page_data_cache;
+void *tocttou_node_cache;
 
-void inline init_tocttou_mutex()
+void inline tocttou_mutex_init(void)
 {
 	mutex_init(&tocttou_global_mutex);
-	// spin_lock_init(&tocttou_lock);
-	//sema_init(&tocttou_sem, 1);
 }
-EXPORT_SYMBOL(init_tocttou_mutex);
+EXPORT_SYMBOL(tocttou_mutex_init);
+
+void inline tocttou_cache_init(void)
+{
+	tocttou_page_data_cache = kmem_cache_create("tocttou_page_data", sizeof(struct tocttou_page_data), 0, 0, NULL);
+	tocttou_node_cache = kmem_cache_create("tocttou_node", sizeof(struct tocttou_marked_node), 0, 0, NULL);
+}
+EXPORT_SYMBOL(tocttou_cache_init);
 
 void inline lock_tocttou_mutex()
 {
-	if (!current->tocttou_mutex_taken) {
-		mutex_lock(&tocttou_global_mutex);
-		current->tocttou_mutex_taken = 1;
-	}
+	mutex_lock(&tocttou_global_mutex);
 }
 EXPORT_SYMBOL(lock_tocttou_mutex);
 
 void inline unlock_tocttou_mutex()
 {
-	if (current->tocttou_mutex_taken) {
-		mutex_unlock(&tocttou_global_mutex);
-		current->tocttou_mutex_taken = 0;
-	}
+	mutex_unlock(&tocttou_global_mutex);
 }
 EXPORT_SYMBOL(unlock_tocttou_mutex);
+
+struct tocttou_page_data* tocttou_page_data_alloc()
+{
+	return (struct tocttou_page_data*) kmem_cache_alloc(tocttou_page_data_cache, GFP_KERNEL);
+}
+
+void tocttou_page_data_free(struct tocttou_page_data* data)
+{
+	kmem_cache_free(tocttou_page_data_cache, data);
+}
+
+struct tocttou_marked_node* tocttou_node_alloc()
+{
+	return (struct tocttou_marked_node*) kmem_cache_alloc(tocttou_node_cache, GFP_KERNEL);
+}
+
+void tocttou_node_free(struct tocttou_marked_node* data)
+{
+	kmem_cache_free(tocttou_node_cache, data);
+}
+
+
+#else 
+
+void inline tocttou_mutex_init(void) {}
+void inline tocttou_cache_init(void) {}
+void inline lock_tocttou_mutex(void) {}
+void inline unlock_tocttou_mutex(void) {}
+
+struct tocttou_page_data* tocttou_page_data_alloc(void) {}
+void tocttou_page_data_free(struct tocttou_page_data* data) {}
+struct tocttou_marked_node* tocttou_node_alloc(void) {}
+void tocttou_node_free(struct tocttou_marked_node* data) {}
+
+#endif
 
 static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
 		     unsigned long address, void *arg)
@@ -172,6 +197,7 @@ static bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
 	return true;
 }
 
+#ifdef CONFIG_TOCTTOU_PROTECTION
 void lock_page_from_va(unsigned long vaddr)
 {
 	pgd_t *pgd;
@@ -267,7 +293,6 @@ retry:
 	//
 	target_page = pte_page(pte);
 
-	// pte_unmap(ptep);
 
 	temp = &current->marked_pages_list;
 
@@ -281,10 +306,9 @@ retry:
 		}
 	}
 
-	if (!in_atomic())
-		new_node = kmalloc(sizeof(*new_node), GFP_KERNEL);
-	else
-		new_node = kmalloc(sizeof(*new_node), GFP_ATOMIC);
+
+	new_node = tocttou_node_alloc();
+
 
 	BUG_ON(!new_node);
 
@@ -297,13 +321,11 @@ retry:
 	// Allocate and initialize the mark data
 	//
 	if (!target_page->markings) {
-		//printk(KERN_ERR "Mark: %lx %lx\n", (unsigned long) task_pid_nr(current), (unsigned long) target_page);
-		if (!in_atomic())
-			target_page->markings = kmalloc(sizeof(*target_page->markings), GFP_KERNEL);
-		else
-			target_page->markings = kmalloc(sizeof(*target_page->markings), GFP_ATOMIC);
+
+		target_page->markings = tocttou_page_data_alloc();
+
 		INIT_TOCTTOU_PAGE_DATA(target_page->markings);
-		SetPageTocttou(target_page);
+
 		target_page->markings->op_code = current->op_code;
 
 		// Iterate through other pages and mark them
@@ -336,8 +358,11 @@ retry:
 
 	unlock_tocttou_mutex();
 }
-EXPORT_SYMBOL(lock_page_from_va);
+#else
+void lock_page_from_va(unsigned long addr) {}
 #endif
+EXPORT_SYMBOL(lock_page_from_va);
+
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
 void unlock_pages_from_page_frame(struct page* target_page)
@@ -349,8 +374,6 @@ void unlock_pages_from_page_frame(struct page* target_page)
 		.arg = NULL,
 		.anon_lock = page_lock_anon_vma_read,
 	};
-
-	//printk(KERN_ERR "Unmark: %lx\n", (unsigned long) (target_page));
 	
 	lock_tocttou_mutex();
 	
@@ -368,76 +391,8 @@ void unlock_pages_from_page_frame(struct page* target_page)
 		target_page->markings = NULL;
 
 		complete_all(&markings->unmarking_completed);
-		ClearPageTocttou(target_page);
 	}
 	unlock_tocttou_mutex();
 }
 EXPORT_SYMBOL(unlock_pages_from_page_frame);
-#endif
-
-#ifdef CONFIG_TOCTTOU_PROTECTION
-int remove_vma_from_markings(struct tocttou_page_data *markings, struct vm_area_struct *vma)
-{
-	struct permission_refs_node *iter;
-	struct permission_refs_node *temp;
-	list_for_each_entry_safe(iter, temp, &markings->old_permissions_list, nodes) {
-		if (iter->vma == vma) {
-			list_del(&iter->nodes);
-			kfree(iter);
-			return 0;
-		}
-	}
-	return 1;
-}
-EXPORT_SYMBOL(remove_vma_from_markings);
-
-int substitute_vma_in_markings(struct tocttou_page_data *markings, struct vm_area_struct *old_vma, struct vm_area_struct *new_vma)
-{
-	struct permission_refs_node *iter;
-	list_for_each_entry(iter, &markings->old_permissions_list, nodes) {
-		if (iter->vma == old_vma) {
-			iter->vma = new_vma;
-			return 0;
-		}
-	}
-	return 1;
-}
-EXPORT_SYMBOL(substitute_vma_in_markings);
-
-struct permission_refs_node* find_vma_in_markings(struct tocttou_page_data *markings, struct vm_area_struct *vma)
-{
-	struct permission_refs_node *iter;
-	list_for_each_entry(iter, &markings->old_permissions_list, nodes) {
-		if (iter->vma == vma) {
-			return iter;
-		}
-	}
-	return NULL;
-}
-EXPORT_SYMBOL(find_vma_in_markings);
-#endif
-
-#ifdef CONFIG_TOCTTOU_PROTECTION
-/*__always_inline*/ void 
-copy_from_user_unlock(const void __user *from, unsigned long n)
-{
-	unsigned long res = n;
-	unsigned long address;
-	might_fault();
-	printk("trace1\n");
-	if (likely(access_ok(from, res))) {
-		printk("trace2\n");
-		if (1) {
-			printk("trace3\n");
-			for (address = (unsigned long) from & PAGE_MASK; address < (unsigned long) from + n; address += PAGE_SIZE) {
-				printk("trace4\n");
-				printk("%lx", address);
-				down_read(&current->mm->mmap_sem);
-				//unlock_page_from_va(address);
-				up_read(&current->mm->mmap_sem);
-			}
-		}
-	}
-}
-EXPORT_SYMBOL(copy_from_user_unlock);
 #endif

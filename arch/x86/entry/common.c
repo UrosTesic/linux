@@ -328,7 +328,7 @@ void unlock_marked_pages()
 
 		list_for_each_entry_safe(iter, next, &current->marked_pages_list, other_nodes) {
         	list_del(&iter->other_nodes);
-        	kfree(iter);
+        	tocttou_node_free(iter);
     	}		
 	}
 	current->tocttou_syscall = 0;

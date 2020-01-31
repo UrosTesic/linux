@@ -3343,6 +3343,7 @@ vm_fault_t alloc_set_pte(struct vm_fault *vmf, struct mem_cgroup *memcg,
 
 	}
 
+#ifdef CONFIG_TOCTTOU_PROTECTION
 	/* The pte has already been added to the reverse mapping
 	 * If another thread wants to change the status of this page,
 	 * it will try to aquire PTL. Considering that we hold the PTL
@@ -3351,6 +3352,7 @@ vm_fault_t alloc_set_pte(struct vm_fault *vmf, struct mem_cgroup *memcg,
 	markings = READ_ONCE(page->markings);
 	if (markings)
 		entry = pte_userprotect(entry);
+#endif
 
 	set_pte_at(vma->vm_mm, vmf->address, vmf->pte, entry);
 
@@ -3901,7 +3903,7 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 	if (!pte_present(vmf->orig_pte))
 		return do_swap_page(vmf);
 
-
+#ifdef CONFIG_TOCTTOU_PROTECTION
 	accessed_page = pte_page(vmf->orig_pte);
 	unsigned smarked = !pte_user(vmf->orig_pte);
 	unsigned rmarked = !pte_rmarked(vmf->orig_pte);
@@ -3964,13 +3966,15 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 
 			markings->guests--;
 			if (!markings->guests) {
-				kfree((void*) markings);
+				tocttou_page_data_free(markings);
 			}
 
 			unlock_tocttou_mutex();
 		}
 		return VM_FAULT_MAJOR;
 	}
+
+#endif
 
 	if (pte_protnone(vmf->orig_pte) && vma_is_accessible(vmf->vma))
 		return do_numa_page(vmf);

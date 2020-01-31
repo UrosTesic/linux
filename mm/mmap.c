@@ -723,49 +723,6 @@ static inline void __vma_relink_tocttou(struct mm_struct *vma,
 }
 
 
-static int adjust_marked_pages_one(pte_t *pte, unsigned long addr,
-			 unsigned long next, struct mm_walk *walk)
-{
-	struct page *page;
-	struct tocttou_page_data *markings;
-	struct permission_refs_node *iter;
-
-	if (!pte_present(*pte)) return 1;
-
-	page = vm_normal_page(walk->vma, addr, *pte);
-	if (!page) return 1;
-
-	markings = READ_ONCE(page->markings);
-
-	if (!markings) return 1;
-
-	lock_tocttou_mutex();
-
-	list_for_each_entry(iter, &markings->old_permissions_list, nodes) {
-		if (iter->vma == walk->vma) {
-			iter->vma = walk->private;
-			break;
-		}
-	}
-
-	unlock_tocttou_mutex();
-	return 1;
-}
-
-
-/*
- * We iterate through the address range in the virtual address space and
- * redirect any RO marked pages to point to the dst VMA.
- */
-static void vma_adjust_marked_pages(struct mm_struct *mm, unsigned long start, unsigned long end, struct vm_area_struct *dst)
-{
-	struct mm_walk_ops walk_ops = {
-		.pte_entry = adjust_marked_pages_one
-	};
-
-	walk_page_range(mm, start, end, &walk_ops, dst);
-}
-
 /*
  * We cannot adjust vm_start, vm_end, vm_pgoff fields of a vma that
  * is already present in an i_mmap tree without adjusting the tree.
@@ -1768,54 +1725,6 @@ static inline int accountable_mapping(struct file *file, vm_flags_t vm_flags)
 		return 0;
 
 	return (vm_flags & (VM_NORESERVE | VM_SHARED | VM_WRITE)) == VM_WRITE;
-}
-
-
-int mark_mapped_pte_one(pte_t *pte, unsigned long addr,
-			 unsigned long next, struct mm_walk *walk)
-{
-	struct page *page;
-	struct tocttou_page_data *markings;
-	struct permission_refs_node *temp;
-
-	if (!pte_present(*pte)) return 1;
-
-	page = vm_normal_page(walk->vma, addr, *pte);
-	if (!page) return 1;
-
-	markings = READ_ONCE(page->markings);
-
-	if (!markings) return 1;
-
-	lock_tocttou_mutex();
-
-	markings = READ_ONCE(page->markings);
-	
-	if (!markings) {
-		unlock_tocttou_mutex();
-		return 1;
-	}
-
-	temp = kmalloc(sizeof(*temp), GFP_KERNEL);
-	temp->vma = walk->vma;
-	temp->is_writable = pte_write(*pte);
-	list_add(&markings->old_permissions_list, &temp->nodes);
-
-	if (pte_write(*pte)) {
-		*pte = pte_wrprotect(*pte);
-	}
-
-	unlock_tocttou_mutex();
-	return 1;
-}
-
-void mark_mapped_pages(struct mm_struct *mm, unsigned long start, unsigned long end)
-{
-	struct mm_walk_ops walk_ops = {
-		.pte_entry = mark_mapped_pte_one
-	};
-
-	walk_page_range(mm, start, end, &walk_ops, NULL);
 }
 
 unsigned long mmap_region(struct file *file, unsigned long addr,
@@ -2840,49 +2749,6 @@ int split_vma(struct mm_struct *mm, struct vm_area_struct *vma,
 	return __split_vma(mm, vma, addr, new_below);
 }
 
-static int unmark_pages_to_be_unmapped_one(pte_t *pte, unsigned long addr,
-			 unsigned long next, struct mm_walk *walk)
-{
-	struct page *page;
-	struct tocttou_page_data *markings;
-	struct permission_refs_node *iter;
-	struct permission_refs_node *temp;
-
-	if (!pte_present(*pte) || pte_write(*pte)) return 1;
-
-	page = pte_page(*pte);
-	markings = READ_ONCE(page->markings);
-
-	if (!markings) return 1;
-
-	lock_tocttou_mutex();
-
-	markings = READ_ONCE(page->markings);
-	
-	if (!markings) {
-		unlock_tocttou_mutex();
-		return 1;
-	}
-
-	list_for_each_entry_safe(iter, temp, &markings->old_permissions_list, nodes) {
-		if (iter->vma == walk->vma) {
-			list_del(&temp->nodes);
-			kfree(temp);
-		}
-	}
-
-	unlock_tocttou_mutex();
-	return 1;
-}
-
-void unmark_pages_to_be_unmapped(struct mm_struct *mm, unsigned long start, unsigned long end)
-{
-	struct mm_walk_ops walk_ops = {
-		.pte_entry = unmark_pages_to_be_unmapped_one
-	};
-
-	walk_page_range(mm, start, end, &walk_ops, NULL);
-}
 /* Munmap is split into 2 main parts -- this part which finds
  * what needs doing, and the areas themselves, which do the
  * work.  This now handles partial unmappings.

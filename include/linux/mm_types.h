@@ -79,7 +79,6 @@ struct tocttou_page_data
 	unsigned owners;
 	unsigned guests;
 	struct completion unmarking_completed;
-	struct list_head old_permissions_list;
 };
 
 static inline void INIT_TOCTTOU_PAGE_DATA(struct tocttou_page_data *data)
@@ -88,7 +87,6 @@ static inline void INIT_TOCTTOU_PAGE_DATA(struct tocttou_page_data *data)
 	data->owners = 0;
 	data->guests = 0;
 	init_completion(&data->unmarking_completed);
-	INIT_LIST_HEAD(&data->old_permissions_list);
 }
 
 struct page {

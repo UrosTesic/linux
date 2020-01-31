@@ -1970,6 +1970,9 @@ static inline void pgtable_init(void)
 {
 	ptlock_cache_init();
 	pgtable_cache_init();
+#ifdef CONFIG_TOCTTOU_PROTECTION
+	tocttou_cache_init();
+#endif
 }
 
 static inline bool pgtable_pte_page_ctor(struct page *page)
