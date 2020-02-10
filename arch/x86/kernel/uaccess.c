@@ -65,13 +65,19 @@ _mark_user_pages_read_only(const void __user *from, unsigned long n)
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
 
-struct mutex tocttou_global_mutex;
+#define TOCTTOU_MUTEX_BITS 8
+#define NUM_TOCTTOU_MUTEXES (1 << TOCTTOU_MUTEX_BITS)
+#define TOCTTOU_MUTEX_MASK (NUM_TOCTTOU_MUTEXES - 1)
+
+struct mutex tocttou_global_mutexes[NUM_TOCTTOU_MUTEXES];
 void *tocttou_page_data_cache;
 void *tocttou_node_cache;
 
 void inline tocttou_mutex_init(void)
 {
-	mutex_init(&tocttou_global_mutex);
+	int i;
+	for (i = 0; i < NUM_TOCTTOU_MUTEXES, i++)
+		mutex_init(&tocttou_global_mutexes[i]);
 }
 EXPORT_SYMBOL(tocttou_mutex_init);
 
@@ -82,15 +88,17 @@ void inline tocttou_cache_init(void)
 }
 EXPORT_SYMBOL(tocttou_cache_init);
 
-void inline lock_tocttou_mutex()
+void inline lock_tocttou_mutex(struct page *page)
 {
-	mutex_lock(&tocttou_global_mutex);
+	unsigned long idx = page_to_pfn(page) & TOCTTOU_MUTEX_MASK;
+	mutex_lock(&tocttou_global_mutex[idx]);
 }
 EXPORT_SYMBOL(lock_tocttou_mutex);
 
-void inline unlock_tocttou_mutex()
+void inline unlock_tocttou_mutex(struct page *page)
 {
-	mutex_unlock(&tocttou_global_mutex);
+	unsigned long idx = page_to_pfn(page) & TOCTTOU_MUTEX_MASK;
+	mutex_unlock(&tocttou_global_mutex[idx]);
 }
 EXPORT_SYMBOL(unlock_tocttou_mutex);
 
@@ -119,8 +127,8 @@ void tocttou_node_free(struct tocttou_marked_node* data)
 
 void inline tocttou_mutex_init(void) {}
 void inline tocttou_cache_init(void) {}
-void inline lock_tocttou_mutex(void) {}
-void inline unlock_tocttou_mutex(void) {}
+void inline lock_tocttou_mutex(struct page*) {}
+void inline unlock_tocttou_mutex(struct page*) {}
 
 struct tocttou_page_data* tocttou_page_data_alloc(void) {}
 void tocttou_page_data_free(struct tocttou_page_data* data) {}
@@ -316,7 +324,7 @@ retry:
 
 	activate_page(target_page);
 
-	lock_tocttou_mutex();
+	lock_tocttou_mutex(target_page);
 	
 	// Allocate and initialize the mark data
 	//
@@ -356,7 +364,7 @@ retry:
 	markings->owners++;
 	list_add(&new_node->other_nodes, &current->marked_pages_list);
 
-	unlock_tocttou_mutex();
+	unlock_tocttou_mutex(target_page);
 }
 #else
 void lock_page_from_va(unsigned long addr) {}
@@ -375,7 +383,7 @@ void unlock_pages_from_page_frame(struct page* target_page)
 		.anon_lock = page_lock_anon_vma_read,
 	};
 	
-	lock_tocttou_mutex();
+	lock_tocttou_mutex(target_page);
 	
 	markings = READ_ONCE(target_page->markings);
 	BUG_ON(!target_page->markings);
@@ -385,14 +393,13 @@ void unlock_pages_from_page_frame(struct page* target_page)
 	{	
 		struct permission_refs_node *iter;
 		struct permission_refs_node *temp;
-
-		rmap_walk(target_page, &rwc);
-
 		target_page->markings = NULL;
+		barrier();
+		rmap_walk(target_page, &rwc);
 
 		complete_all(&markings->unmarking_completed);
 	}
-	unlock_tocttou_mutex();
+	unlock_tocttou_mutex(target_page);
 }
 EXPORT_SYMBOL(unlock_pages_from_page_frame);
 #endif
