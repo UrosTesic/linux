@@ -1057,18 +1057,6 @@ again:
 			if (unlikely(!page))
 				continue;
 
-			/*markings = READ_ONCE(page->markings);
-			if (markings) {
-				lock_tocttou_mutex();
-
-				markings = READ_ONCE(page->markings);
-				if (markings) {
-					remove_vma_from_markings(markings, vma);
-				}
-				unlock_tocttou_mutex();
-			}*/
-			
-
 			if (!PageAnon(page)) {
 				if (pte_dirty(ptent)) {
 					force_flush = 1;
@@ -3308,10 +3296,6 @@ vm_fault_t alloc_set_pte(struct vm_fault *vmf, struct mem_cgroup *memcg,
 			return ret;
 	}
 
-	/*markings = READ_ONCE(page->markings);
-	if (markings)
-		lock_tocttou_mutex();*/
-
 	if (!vmf->pte) {
 		ret = pte_alloc_one_map(vmf);
 		if (ret) {
@@ -3916,13 +3900,13 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 	if (accessed_page->markings && (smarked || rmarked) && (vmf->flags & FAULT_FLAG_DO_TOCTTOU)) {
 		struct tocttou_page_data *markings;
 		
-		lock_tocttou_mutex();
+		lock_tocttou_mutex(accessed_page);
 
 		markings = READ_ONCE(accessed_page->markings);
 
 		if (!accessed_page->markings) {
 			pte_unmap(vmf->pte);
-			unlock_tocttou_mutex();
+			unlock_tocttou_mutex(accessed_page);
 		} else {
 
 			// If we are in user-mode, and we try to read from an S-marked page
@@ -3934,7 +3918,7 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 				pte_t temp = pte_stor_mark(vmf->orig_pte);
 				set_pte_at(vmf->vma->vm_mm, vmf->address, vmf->pte, temp);
 				pte_unmap(vmf->pte);
-				unlock_tocttou_mutex();
+				unlock_tocttou_mutex(accessed_page);
 				return VM_FAULT_MAJOR;
 			}
 
@@ -3947,7 +3931,7 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 				pte_t temp = pte_rtos_mark(vmf->orig_pte);
 				set_pte_at(vmf->vma->vm_mm, vmf->address, vmf->pte, temp);
 				pte_unmap(vmf->pte);
-				unlock_tocttou_mutex();
+				unlock_tocttou_mutex(accessed_page);
 				return VM_FAULT_MAJOR;
 			}
 
@@ -3956,20 +3940,20 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 			pte_unmap(vmf->pte);
 			markings->guests++;
 			
-			unlock_tocttou_mutex();
+			unlock_tocttou_mutex(accessed_page);
 			up_read(&current->mm->mmap_sem);
 			//printk(KERN_ERR "Wait: PID: %lx Page: %lx Flags: %x Anonymous: %x PTE user: %x PTE write: %x No threads: %x Op code: %ld\n", (unsigned long) task_pid_nr(current), (unsigned long) accessed_page, vmf->flags, vma_is_anonymous(vmf->vma), (unsigned) !smarked, write, get_nr_threads(current), markings->op_code);
 			wait_for_completion(&markings->unmarking_completed);
 			//printk(KERN_ERR "Continue: %lx %lx\n", (unsigned long) task_pid_nr(current), (unsigned long) accessed_page);
 			down_read(&current->mm->mmap_sem);
-			lock_tocttou_mutex();
+			lock_tocttou_mutex(accessed_page);
 
 			markings->guests--;
 			if (!markings->guests) {
 				tocttou_page_data_free(markings);
 			}
 
-			unlock_tocttou_mutex();
+			unlock_tocttou_mutex(accessed_page);
 		}
 		return VM_FAULT_MAJOR;
 	}
