@@ -489,13 +489,16 @@ static ssize_t new_sync_write(struct file *filp, const char __user *buf, size_t 
 
 static ssize_t __vfs_write(struct file *file, const char __user *p,
 			   size_t count, loff_t *pos)
-{
+{	ssize_t result;
+
+	down_write(&file->f_tocttou_sem);
 	if (file->f_op->write)
-		return file->f_op->write(file, p, count, pos);
+		result = file->f_op->write(file, p, count, pos);
 	else if (file->f_op->write_iter)
-		return new_sync_write(file, p, count, pos);
+		result = new_sync_write(file, p, count, pos);
 	else
-		return -EINVAL;
+		result = -EINVAL;
+	up_write(&file->f_tocttou_sem);
 }
 
 ssize_t __kernel_write(struct file *file, const void *buf, size_t count, loff_t *pos)

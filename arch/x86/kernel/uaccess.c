@@ -314,6 +314,10 @@ retry:
 
 	new_node->marked_page = target_page;
 
+	if (vma->f_ops.f_write) {
+		
+	}
+
 	activate_page(target_page);
 
 	lock_tocttou_mutex();
