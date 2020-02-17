@@ -1261,7 +1261,7 @@ static inline void page_kasan_tag_reset(struct page *page) { }
 #ifdef CONFIG_TOCTTOU_PROTECTION
 static inline void page_tocttou_init(struct page *page)
 {
-	page->markings = NULL;
+	clear_page_tocttou(page);
 }
 #else
 static inline void page_tocttou_init(struct page * page) { }

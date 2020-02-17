@@ -489,16 +489,25 @@ static ssize_t new_sync_write(struct file *filp, const char __user *buf, size_t 
 
 static ssize_t __vfs_write(struct file *file, const char __user *p,
 			   size_t count, loff_t *pos)
-{	ssize_t result;
+{	
+	ssize_t result;
 
-	down_write(&file->f_tocttou_sem);
+#ifdef CONFIG_TOCTTOU_PROTECTION
+	tocttou_file_write_start(file);
+#endif
+
 	if (file->f_op->write)
 		result = file->f_op->write(file, p, count, pos);
 	else if (file->f_op->write_iter)
 		result = new_sync_write(file, p, count, pos);
 	else
 		result = -EINVAL;
-	up_write(&file->f_tocttou_sem);
+
+#ifdef CONFIG_TOCTTOU_PROTECTION
+	tocttou_file_write_end(file);
+#endif
+
+	return result;
 }
 
 ssize_t __kernel_write(struct file *file, const void *buf, size_t count, loff_t *pos)
@@ -555,6 +564,7 @@ ssize_t vfs_write(struct file *file, const char __user *buf, size_t count, loff_
 
 	ret = rw_verify_area(WRITE, file, pos, count);
 	if (!ret) {
+		
 		if (count > MAX_RW_COUNT)
 			count =  MAX_RW_COUNT;
 		file_start_write(file);

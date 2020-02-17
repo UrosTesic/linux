@@ -33,6 +33,7 @@ void
 _mark_user_pages_read_only(const void __user *from, unsigned long n)
 {
 	unsigned long address;
+	struct vm_area_struct *vma;
 	if (current->flags & PF_EXITING) {
 		return;
 	}
@@ -42,8 +43,14 @@ _mark_user_pages_read_only(const void __user *from, unsigned long n)
 		case __NR_poll:
 		case __NR_select:
 		case __NR_execve:
+		case __NR_writev:
+		case __NR_pwrite64:
+		case __NR_pwritev2:
+		case __NR_finit_module:
+		case __NR_exit:
 			return;
 	}
+	vma = find_vma(current->mm, (unsigned long) from);
 	might_fault();
 	if (likely(access_ok(from, n))) {
 		
@@ -51,6 +58,11 @@ _mark_user_pages_read_only(const void __user *from, unsigned long n)
 			/* Iterate through all pages and mark them as RO
 			 * Add the pages to the list of pages locked by this process
 			 * Save whether a page is RO */
+			if (address >= vma->vm_end) vma = vma->vm_next;
+			if (!vma) break;
+
+			if (vma->vm_file && (vma->vm_flags & VM_SHARED)) tocttou_file_mark_start(vma->vm_file);
+				
 			down_read(&current->mm->mmap_sem);
 
 			lock_page_from_va(address);
@@ -70,14 +82,17 @@ _mark_user_pages_read_only(const void __user *from, unsigned long n)
 #define TOCTTOU_MUTEX_MASK (NUM_TOCTTOU_MUTEXES - 1)
 
 struct mutex tocttou_global_mutexes[NUM_TOCTTOU_MUTEXES];
+struct list_head tocttou_global_structs[NUM_TOCTTOU_MUTEXES];
 void *tocttou_page_data_cache;
 void *tocttou_node_cache;
 
 void inline tocttou_mutex_init(void)
 {
 	int i;
-	for (i = 0; i < NUM_TOCTTOU_MUTEXES, i++)
+	for (i = 0; i < NUM_TOCTTOU_MUTEXES; i++) {
 		mutex_init(&tocttou_global_mutexes[i]);
+		INIT_LIST_HEAD(&tocttou_global_structs[i]);
+	}
 }
 EXPORT_SYMBOL(tocttou_mutex_init);
 
@@ -91,14 +106,14 @@ EXPORT_SYMBOL(tocttou_cache_init);
 void inline lock_tocttou_mutex(struct page *page)
 {
 	unsigned long idx = page_to_pfn(page) & TOCTTOU_MUTEX_MASK;
-	mutex_lock(&tocttou_global_mutex[idx]);
+	mutex_lock(&tocttou_global_mutexes[idx]);
 }
 EXPORT_SYMBOL(lock_tocttou_mutex);
 
 void inline unlock_tocttou_mutex(struct page *page)
 {
 	unsigned long idx = page_to_pfn(page) & TOCTTOU_MUTEX_MASK;
-	mutex_unlock(&tocttou_global_mutex[idx]);
+	mutex_unlock(&tocttou_global_mutexes[idx]);
 }
 EXPORT_SYMBOL(unlock_tocttou_mutex);
 
@@ -120,6 +135,78 @@ struct tocttou_marked_node* tocttou_node_alloc()
 void tocttou_node_free(struct tocttou_marked_node* data)
 {
 	kmem_cache_free(tocttou_node_cache, data);
+}
+
+void tocttou_file_write_start(struct file *file)
+{
+	down_write(&file->f_mapping->host->i_tocttou_sem);
+}
+
+void tocttou_file_write_end(struct file *file)
+{
+	up_write(&file->f_mapping->host->i_tocttou_sem);
+}
+
+void tocttou_file_mark_start(struct file *file)
+{
+	//BUG_ON(PageAnon(page));
+	down_read(&file->f_mapping->host->i_tocttou_sem);
+}
+
+void tocttou_file_mark_end(struct page *page)
+{
+	BUG_ON(PageAnon(page));
+	up_read(&page->mapping->host->i_tocttou_sem);
+}
+
+
+struct tocttou_page_data* get_page_markings(struct page* page)
+{
+	struct tocttou_page_data *ptr;
+
+	if (!is_page_tocttou(page))
+		return NULL;
+
+	unsigned long pfn = page_to_pfn(page);
+	unsigned long idx = page_to_pfn(page) & TOCTTOU_MUTEX_MASK;
+	
+	list_for_each_entry(ptr, &tocttou_global_structs[idx], other_nodes) {
+		if (ptr->pfn == pfn)
+			return ptr;
+	}
+	return NULL;
+}
+
+struct tocttou_page_data* remove_page_markings(struct page* page)
+{
+	struct tocttou_page_data *ptr;
+	struct tocttou_page_data *temp;
+
+	if (!is_page_tocttou(page))
+		return NULL;
+
+	unsigned long pfn = page_to_pfn(page);
+	unsigned long idx = page_to_pfn(page) & TOCTTOU_MUTEX_MASK;
+	
+	clear_page_tocttou(page);
+	list_for_each_entry_safe(ptr, temp, &tocttou_global_structs[idx], other_nodes) {
+		if (ptr->pfn == pfn){
+			list_del(&ptr->other_nodes);
+			return ptr;
+		}
+	}
+	BUG();
+	return NULL;
+}
+
+void add_page_markings(struct page* page, struct tocttou_page_data* data)
+{
+	unsigned long pfn = page_to_pfn(page);
+	unsigned long idx = page_to_pfn(page) & TOCTTOU_MUTEX_MASK;
+
+	set_page_tocttou(page);
+	data->pfn = pfn;
+	list_add(&data->other_nodes, &tocttou_global_structs[idx]);
 }
 
 
@@ -167,15 +254,16 @@ static bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
 {
 	pte_t entry;
 	spinlock_t *ptl;
-	struct tocttou_page_data *markings = page->markings;
+	struct tocttou_page_data *markings;
 	struct page_vma_mapped_walk pvmw = {
 		.page = page,
 		.vma = vma,
 		.address = address,
 	};
 
+	BUG_ON(!is_page_tocttou(page));
 
-	BUG_ON(!markings);
+	markings = get_page_markings(page);
 	// Find the PTE which maps the address
 	//
 	while (page_vma_mapped_walk(&pvmw)) {
@@ -301,6 +389,7 @@ retry:
 	//
 	target_page = pte_page(pte);
 
+	activate_page(target_page);
 
 	temp = &current->marked_pages_list;
 
@@ -314,7 +403,6 @@ retry:
 		}
 	}
 
-
 	new_node = tocttou_node_alloc();
 
 
@@ -322,23 +410,18 @@ retry:
 
 	new_node->marked_page = target_page;
 
-	if (vma->f_ops.f_write) {
-		
-	}
-
-	activate_page(target_page);
 
 	lock_tocttou_mutex(target_page);
 	
 	// Allocate and initialize the mark data
 	//
-	if (!target_page->markings) {
+	if (!is_page_tocttou(target_page)) {
+		markings = tocttou_page_data_alloc();
 
-		target_page->markings = tocttou_page_data_alloc();
+		INIT_TOCTTOU_PAGE_DATA(markings);
 
-		INIT_TOCTTOU_PAGE_DATA(target_page->markings);
-
-		target_page->markings->op_code = current->op_code;
+		add_page_markings(target_page, markings);
+		markings->op_code = current->op_code;
 
 		// Iterate through other pages and mark them
 		total = 0;
@@ -360,12 +443,14 @@ retry:
 
 			pte_unmap(ptep);
 		}
+	} else {
+		markings = get_page_markings(target_page);
 	}
-	markings = target_page->markings;
 
 	// Increment the owners so we keep the track how many processes need to protect this page
 	//
 	markings->owners++;
+	
 	list_add(&new_node->other_nodes, &current->marked_pages_list);
 
 	unlock_tocttou_mutex(target_page);
@@ -389,21 +474,24 @@ void unlock_pages_from_page_frame(struct page* target_page)
 	
 	lock_tocttou_mutex(target_page);
 	
-	markings = READ_ONCE(target_page->markings);
-	BUG_ON(!target_page->markings);
+	BUG_ON(!is_page_tocttou(target_page));
+	markings = get_page_markings(target_page);
 	
 	markings->owners--;
 	if (!markings->owners)
 	{	
 		struct permission_refs_node *iter;
 		struct permission_refs_node *temp;
-		target_page->markings = NULL;
 		barrier();
 		rmap_walk(target_page, &rwc);
+		remove_page_markings(target_page);
 
 		complete_all(&markings->unmarking_completed);
 	}
 	unlock_tocttou_mutex(target_page);
+
+	if (!PageAnon(target_page))
+		tocttou_file_mark_end(target_page);
 }
 EXPORT_SYMBOL(unlock_pages_from_page_frame);
 #endif

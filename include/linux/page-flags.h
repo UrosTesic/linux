@@ -436,6 +436,21 @@ PAGEFLAG(Idle, idle, PF_ANY)
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
 PAGEFLAG(Tocttou, tocttou_locked, PF_ANY)
+
+static inline bool is_page_tocttou(struct page *page)
+{
+	return PageTocttou(page);
+}
+
+static inline void set_page_tocttou(struct page *page)
+{
+	SetPageTocttou(page);
+}
+
+static inline void clear_page_tocttou(struct page *page)
+{
+	ClearPageTocttou(page);
+}
 #endif
 
 /*

@@ -3333,8 +3333,7 @@ vm_fault_t alloc_set_pte(struct vm_fault *vmf, struct mem_cgroup *memcg,
 	 * it will try to aquire PTL. Considering that we hold the PTL
 	 * that thread will wait, until we are finished with our marking.
 	 */
-	markings = READ_ONCE(page->markings);
-	if (markings)
+	if (is_page_tocttou(page))
 		entry = pte_userprotect(entry);
 #endif
 
@@ -3897,14 +3896,14 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 		return VM_FAULT_PROTECTION;
 
 	// We wait if the page is marked
-	if (accessed_page->markings && (smarked || rmarked) && (vmf->flags & FAULT_FLAG_DO_TOCTTOU)) {
+	if (is_page_tocttou(accessed_page) && (smarked || rmarked) && (vmf->flags & FAULT_FLAG_DO_TOCTTOU)) {
 		struct tocttou_page_data *markings;
 		
 		lock_tocttou_mutex(accessed_page);
 
-		markings = READ_ONCE(accessed_page->markings);
+		markings = get_page_markings(accessed_page);
 
-		if (!accessed_page->markings) {
+		if (!is_page_tocttou(accessed_page)) {
 			pte_unmap(vmf->pte);
 			unlock_tocttou_mutex(accessed_page);
 		} else {

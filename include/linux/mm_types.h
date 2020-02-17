@@ -78,7 +78,9 @@ struct tocttou_page_data
 	unsigned long op_code;
 	unsigned owners;
 	unsigned guests;
+	unsigned long pfn;
 	struct completion unmarking_completed;
+	struct list_head other_nodes;
 };
 
 static inline void INIT_TOCTTOU_PAGE_DATA(struct tocttou_page_data *data)
@@ -242,10 +244,6 @@ struct page {
 
 #ifdef LAST_CPUPID_NOT_IN_PAGE_FLAGS
 	int _last_cpupid;
-#endif
-
-#ifdef CONFIG_TOCTTOU_PROTECTION
-	struct tocttou_page_data *markings;
 #endif
 } _struct_page_alignment;
 

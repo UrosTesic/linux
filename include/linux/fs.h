@@ -641,6 +641,10 @@ struct inode {
 	struct super_block	*i_sb;
 	struct address_space	*i_mapping;
 
+#ifdef CONFIG_TOCTTOU_PROTECTION
+	struct rw_semaphore i_tocttou_sem;
+#endif
+
 #ifdef CONFIG_SECURITY
 	void			*i_security;
 #endif
@@ -955,7 +959,6 @@ struct file {
 	struct fown_struct	f_owner;
 	const struct cred	*f_cred;
 	struct file_ra_state	f_ra;
-	struct rw_semaphore f_tocttou_sem;
 
 	u64			f_version;
 #ifdef CONFIG_SECURITY

@@ -153,8 +153,8 @@ _copy_to_user(void __user *, const void *, unsigned long);
 
 
 void lock_page_from_va(unsigned long vaddr);
-void lock_tocttou_mutex(void);
-void unlock_tocttou_mutex(void);
+void lock_tocttou_mutex(struct page*);
+void unlock_tocttou_mutex(struct page*);
 void unlock_marked_pages(void);
 void tocttou_mutex_init(void);
 void tocttou_cache_init(void);
@@ -162,6 +162,12 @@ struct tocttou_page_data* tocttou_page_data_alloc(void);
 void tocttou_page_data_free(struct tocttou_page_data* data);
 struct tocttou_marked_node* tocttou_node_alloc(void);
 void tocttou_node_free(struct tocttou_marked_node* data);
+void tocttou_file_write_start(struct file *file);
+void tocttou_file_write_end(struct file *file);
+void tocttou_file_mark_start(struct file *file);
+void tocttou_file_mark_end(struct page *page);
+int is_tocttou_marked(struct page *page);
+struct tocttou_page_data* get_page_markings(struct page*);
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
 __must_check unsigned long
