@@ -608,6 +608,12 @@ struct tocttou_marked_node
 	struct list_head other_nodes;
 };
 
+struct tocttou_marked_file
+{
+	struct rw_semaphore *sem;
+	struct list_head other_nodes;
+};
+
 union rcu_special {
 	struct {
 		u8			blocked;
@@ -1279,6 +1285,7 @@ struct task_struct {
 	unsigned tocttou_syscall;
 	unsigned tocttou_mutex_taken;
 	struct list_head marked_pages_list;
+	struct list_head marked_files_list;
 #endif
 
 	/*

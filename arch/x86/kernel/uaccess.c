@@ -8,8 +8,9 @@
 #include <linux/mm.h>
 #include "../../mm/internal.h"
 
+#ifdef CONFIG_TOCTTOU_PROTECTION && !INLINE_COPY_FROM_USER
 __must_check unsigned long
-_copy_from_user_check(void *to, const void __user *from, unsigned long n)
+_copy_from_user(void *to, const void __user *from, unsigned long n)
 {
 	unsigned long res = n;
 	might_fault();
@@ -26,8 +27,8 @@ _copy_from_user_check(void *to, const void __user *from, unsigned long n)
 		memset(to + (n - res), 0, res);
 	return res;
 }
-EXPORT_SYMBOL(_copy_from_user_check);
-
+EXPORT_SYMBOL(_copy_from_user);
+#endif
 
 void
 _mark_user_pages_read_only(const void __user *from, unsigned long n)
@@ -85,6 +86,7 @@ struct mutex tocttou_global_mutexes[NUM_TOCTTOU_MUTEXES];
 struct list_head tocttou_global_structs[NUM_TOCTTOU_MUTEXES];
 void *tocttou_page_data_cache;
 void *tocttou_node_cache;
+void *tocttou_file_cache;
 
 void inline tocttou_mutex_init(void)
 {
@@ -100,6 +102,7 @@ void inline tocttou_cache_init(void)
 {
 	tocttou_page_data_cache = kmem_cache_create("tocttou_page_data", sizeof(struct tocttou_page_data), 0, 0, NULL);
 	tocttou_node_cache = kmem_cache_create("tocttou_node", sizeof(struct tocttou_marked_node), 0, 0, NULL);
+	tocttou_file_cache = kmem_cache_create("tocttou_file_node", sizeof(struct tocttou_marked_file), 0, 0, NULL);
 }
 EXPORT_SYMBOL(tocttou_cache_init);
 
@@ -137,6 +140,16 @@ void tocttou_node_free(struct tocttou_marked_node* data)
 	kmem_cache_free(tocttou_node_cache, data);
 }
 
+struct tocttou_marked_file* tocttou_marked_file_alloc()
+{
+	return (struct tocttou_marked_file *) kmem_cache_alloc(tocttou_file_cache, GFP_KERNEL);
+}
+
+void tocttou_marked_file_free(struct tocttou_marked_file *data)
+{
+	kmem_cache_free(tocttou_file_cache, data);
+}
+
 void tocttou_file_write_start(struct file *file)
 {
 	down_write(&file->f_mapping->host->i_tocttou_sem);
@@ -149,16 +162,36 @@ void tocttou_file_write_end(struct file *file)
 
 void tocttou_file_mark_start(struct file *file)
 {
-	//BUG_ON(PageAnon(page));
-	down_read(&file->f_mapping->host->i_tocttou_sem);
+	struct rw_semaphore *sem = &file->f_mapping->host->i_tocttou_sem;
+	struct tocttou_marked_file *iter;
+
+	list_for_each_entry(iter, &current->marked_files_list, other_nodes) {
+		if (iter->sem == sem)
+			return;
+	}
+
+	struct tocttou_marked_file *new_node = tocttou_marked_file_alloc();
+	new_node->sem = sem;
+	list_add(&new_node->other_nodes, &current->marked_files_list);
+	down_read(sem);
 }
 
-void tocttou_file_mark_end(struct page *page)
+void tocttou_file_mark_end(struct rw_semaphore *sem)
 {
-	BUG_ON(PageAnon(page));
-	up_read(&page->mapping->host->i_tocttou_sem);
+	up_read(sem);
 }
 
+void tocttou_unmark_all_files()
+{
+	struct tocttou_marked_file *iter;
+	struct tocttou_marked_file *temp;
+
+	list_for_each_entry_safe(iter, temp, &current->marked_files_list, other_nodes) {
+		up_read(iter->sem);
+		list_del(&iter->other_nodes);
+		tocttou_marked_file_free(iter);
+	}
+}
 
 struct tocttou_page_data* get_page_markings(struct page* page)
 {
@@ -489,9 +522,6 @@ void unlock_pages_from_page_frame(struct page* target_page)
 		complete_all(&markings->unmarking_completed);
 	}
 	unlock_tocttou_mutex(target_page);
-
-	if (!PageAnon(target_page))
-		tocttou_file_mark_end(target_page);
 }
 EXPORT_SYMBOL(unlock_pages_from_page_frame);
 #endif

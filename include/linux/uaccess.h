@@ -114,7 +114,7 @@ void unlock_pages_from_page_frame(struct page *page);
 void
 _mark_user_pages_read_only(const void __user *from, unsigned long n);
 
-
+#ifndef CONFIG_TOCTTOU_PROTECTION
 #ifdef INLINE_COPY_FROM_USER
 static inline __must_check unsigned long
 _copy_from_user(void *to, const void __user *from, unsigned long n)
@@ -133,6 +133,7 @@ _copy_from_user(void *to, const void __user *from, unsigned long n)
 extern __must_check unsigned long
 _copy_from_user(void *, const void __user *, unsigned long);
 #endif /* INLINE_COPY_FROM_USER */
+#endif /* CONFIG_TOCTTOU_PROTECTION */
 
 
 #ifdef INLINE_COPY_TO_USER
@@ -165,19 +166,43 @@ void tocttou_node_free(struct tocttou_marked_node* data);
 void tocttou_file_write_start(struct file *file);
 void tocttou_file_write_end(struct file *file);
 void tocttou_file_mark_start(struct file *file);
-void tocttou_file_mark_end(struct page *page);
+void tocttou_file_mark_end(struct rw_semaphore *sem);
+struct tocttou_marked_file* tocttou_marked_file_alloc(void);
+void tocttou_marked_file_free(struct tocttou_marked_file *data);
+void tocttou_unmark_all_files(void);
 int is_tocttou_marked(struct page *page);
 struct tocttou_page_data* get_page_markings(struct page*);
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
-__must_check unsigned long
-_copy_from_user_check(void *to, const void __user *from, unsigned long n);
+#ifdef INLINE_COPY_FROM_USER
+static inline __must_check unsigned long
+_copy_from_user(void *to, const void __user *from, unsigned long n)
+{
+	unsigned long res = n;
+	might_fault();
+	if (likely(access_ok(from, n))) {
+		mm_segment_t usr_seg = USER_DS;
+		kasan_check_write(to, n);
+		
+		if (!__chk_range_not_ok((unsigned long) from, n, (unsigned long) usr_seg.seg))
+			_mark_user_pages_read_only(from, n);
+
+		res = raw_copy_from_user(to, from, n);
+	}
+	if (unlikely(res))
+		memset(to + (n - res), 0, res);
+	return res;
+}
+#else
+extern __must_check unsigned long
+_copy_from_user(void *, const void __user *, unsigned long);
+#endif /* INLINE_COPY_FROM_USER */
 
 static __always_inline __must_check unsigned long
 copy_from_user(void *to, const void __user *from, unsigned long n)
 {
 	if (likely(check_copy_size(to, n, false)))
-		n = _copy_from_user_check(to, from, n);
+		n = _copy_from_user(to, from, n);
 	return n;
 }
 #else

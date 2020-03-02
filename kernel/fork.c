@@ -2115,6 +2115,7 @@ static __latent_entropy struct task_struct *copy_process(
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
 	INIT_LIST_HEAD(&p->marked_pages_list);
+	INIT_LIST_HEAD(&p->marked_files_list);
 	p->tocttou_mutex_taken = 0;
 #endif
 

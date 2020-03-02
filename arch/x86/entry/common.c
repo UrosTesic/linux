@@ -320,16 +320,19 @@ void unlock_marked_pages()
 	struct tocttou_marked_node *iter;
 	struct tocttou_marked_node *next;
 
+	struct tocttou_marked_file *file_iter;
+	struct tocttou_marked_file *file_next;
+
 
 	if (current->tocttou_syscall) {
-		list_for_each_entry(iter, &current->marked_pages_list, other_nodes) {
-			unlock_pages_from_page_frame(iter->marked_page);
-		}
 
 		list_for_each_entry_safe(iter, next, &current->marked_pages_list, other_nodes) {
+			unlock_pages_from_page_frame(iter->marked_page);
         	list_del(&iter->other_nodes);
         	tocttou_node_free(iter);
-    	}		
+    	}
+
+		tocttou_unmark_all_files();
 	}
 	current->tocttou_syscall = 0;
 }

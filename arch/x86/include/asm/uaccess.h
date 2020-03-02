@@ -529,8 +529,13 @@ struct __large_struct { unsigned long buf[100]; };
  * On error, the variable @x is set to zero.
  */
 
+#ifndef CONFIG_TOCTTOU_PROTECTION
 #define __get_user(x, ptr)						\
 	__get_user_nocheck((x), (ptr), sizeof(*(ptr)))
+#else
+#define __get_user(x, ptr)						\
+	(copy_from_user((void *) &(x), (void*) (ptr), sizeof(x)) == 0 ? 0 : -EFAULT)
+#endif /* CONFIG_TOCTTOU_PROTECTION */
 
 /**
  * __put_user - Write a simple value into user space, with less checking.
