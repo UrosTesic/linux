@@ -244,6 +244,9 @@ strncpy_from_user(char *dst, const char __user *src, long count)
 #define __strnlen_user(s, n) (strnlen((s), (n)) + 1)
 #endif
 
+void
+_mark_user_pages_read_only(const void __user *from, unsigned long n);
+
 /*
  * Unlike strnlen, strnlen_user includes the nul terminator in
  * its returned count. Callers should check for a returned value
@@ -251,9 +254,19 @@ strncpy_from_user(char *dst, const char __user *src, long count)
  */
 static inline long strnlen_user(const char __user *src, long n)
 {
+	long old_result, new_result;
+
 	if (!access_ok(src, 1))
 		return 0;
-	return __strnlen_user(src, n);
+
+	new_result = __strnlen_user(src, n);
+	do {
+		old_result = new_result;
+		_mark_user_pages_read_only(src, old_result);
+		new_result = __strnlen_user(src, n);
+	} while (old_result != new_result);
+
+	return new_result;
 }
 
 /*

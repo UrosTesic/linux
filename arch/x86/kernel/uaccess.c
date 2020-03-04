@@ -49,6 +49,7 @@ _mark_user_pages_read_only(const void __user *from, unsigned long n)
 		case __NR_pwritev2:
 		case __NR_finit_module:
 		case __NR_exit:
+		case -1:
 			return;
 	}
 	vma = find_vma(current->mm, (unsigned long) from);
@@ -78,7 +79,7 @@ _mark_user_pages_read_only(const void __user *from, unsigned long n)
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
 
-#define TOCTTOU_MUTEX_BITS 8
+#define TOCTTOU_MUTEX_BITS 12
 #define NUM_TOCTTOU_MUTEXES (1 << TOCTTOU_MUTEX_BITS)
 #define TOCTTOU_MUTEX_MASK (NUM_TOCTTOU_MUTEXES - 1)
 

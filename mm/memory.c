@@ -3935,7 +3935,6 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 			}
 
 
-
 			pte_unmap(vmf->pte);
 			markings->guests++;
 			
