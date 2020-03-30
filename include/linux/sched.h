@@ -614,6 +614,15 @@ struct tocttou_marked_file
 	struct list_head other_nodes;
 };
 
+struct tocttou_deferred_write
+{
+	unsigned long address; /* Destination address */
+	unsigned long length; /* Data length */
+	void* data; /* Data we want to write */
+
+	struct list_head other_nodes; /* Other writes */
+}
+
 union rcu_special {
 	struct {
 		u8			blocked;
@@ -1286,6 +1295,9 @@ struct task_struct {
 	unsigned tocttou_mutex_taken;
 	struct list_head marked_pages_list;
 	struct list_head marked_files_list;
+
+	struct mutex deferred_writes_mutex;
+	struct list_head deferred_writes_list;
 #endif
 
 	/*

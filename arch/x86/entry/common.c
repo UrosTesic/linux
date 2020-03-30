@@ -333,6 +333,7 @@ void unlock_marked_pages()
     	}
 
 		tocttou_unmark_all_files();
+		tocttou_perform_deferred_writes();
 	}
 	current->tocttou_syscall = 0;
 }

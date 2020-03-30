@@ -489,6 +489,10 @@ struct mm_struct {
 
 		struct core_state *core_state; /* coredumping support */
 
+#ifdef CONFIG_TOCTTOU_PROTECTION
+		struct rb_root_cached marked_ranges_root;
+		struct mutex marked_ranges_mutex;
+#endif
 #ifdef CONFIG_AIO
 		spinlock_t			ioctx_lock;
 		struct kioctx_table __rcu	*ioctx_table;

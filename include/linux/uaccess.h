@@ -218,8 +218,65 @@ copy_from_user(void *to, const void __user *from, unsigned long n)
 static __always_inline unsigned long __must_check
 copy_to_user(void __user *to, const void *from, unsigned long n)
 {
-	if (likely(check_copy_size(from, n, true)))
+	if (likely(check_copy_size(from, n, true))) {
+		unsigned long start_page_addr;
+		unsigned long end_page_addr;
+
+		unsigned long write_to;
+		unsigned long read_from;
+		unsigned long bytes_left;
+		unsigned long chunk_bytes;
+		unsigned long iter_no;
+		unsigned long result;
+
+
+		start_page_addr = (unsigned long) to;
+		start_page_addr |= ~PAGE_MASK;
+
+		end_page_addr = (unsigned long) to + n;
+		end_page_addr |= ~PAGE_MASK;
+
+		bytes_left = n;
+		result = 0;
+
+		for (unsigned long addr = start_page_addr, iter_no = 0; addr <= end_page_addr; addr += PAGE_SIZE, iter_no++) {
+			interval_tree_node *check;
+
+			if (!iter_no) {
+				write_to = to;
+				read_from = from;
+				chunk_bytes = PAGE_SIZE - (write_to - start_page_addr);
+			} else {
+				write_to = addr;
+				read_from = from;
+				chunk_bytes = (bytes_left > PAGE_SIZE) ? PAGE_SIZE : bytes_left;
+			}
+
+			mutex_lock(current->mm->marked_ranges_mutex);
+			check = interval_tree_iter_first(current->mm->marked_ranges_root, write_to, write_to + (chunk_bytes - 1));
+
+			/* Copy the corresponding data chunk */
+			if (!check) {
+				result += _copy_to_user(write_to, read_from, chunk_bytes);
+			} else {
+				struct tocttou_deferred_write *new_node;
+				void* temp_data = kmalloc(chunk_bytes, GFP_KERNEL);
+
+				new_node = tocttou_deferred_write_alloc();
+				new_node->address = write_to;
+				new_node->length = chunk_bytes;
+				new_node->data = temp_data;
+
+				list_add_tail(&new_node->other_nodes, &current->deferred_writes_list);
+				
+				result += chunk_bytes;
+				
+			}
+
+			mutex_unlock(current->mm->marked_ranges_mutex);
+		}
 		n = _copy_to_user(to, from, n);
+	}
 	return n;
 }
 #ifdef CONFIG_COMPAT

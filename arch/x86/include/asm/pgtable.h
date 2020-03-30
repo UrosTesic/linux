@@ -199,6 +199,11 @@ static inline int pte_user(pte_t pte)
 	return pte_flags(pte) & _PAGE_USER;
 }
 
+static inline int pte_smarked(pte_t pte)
+{
+	return !pte_user(pte);
+}
+
 static inline int pte_huge(pte_t pte)
 {
 	return pte_flags(pte) & _PAGE_PSE;
@@ -408,6 +413,41 @@ static inline pte_t pte_stor_mark(pte_t pte)
 	}
 	temp = pte_clear_flags(temp, _PAGE_RW);
 	return temp;
+}
+
+static inline pte_t pte_rmark(pte_t pte)
+{
+	pte_t temp = pte_set_flags(pte, _PAGE_SOFTW4);
+	temp = pte_clear_flags(pte, _PAGE_SOFTW2);
+
+	if (pte_write(pte)) {
+		temp = pte_set_flags(temp, _PAGE_SOFTW2);
+		temp = pte_clear_flags(temp, _PAGE_RW);
+	}
+
+	return temp;
+}
+
+static inline pte_t pte_runmark(pte_t pte)
+{
+	if (pte_rmarked(pte)) {
+		int writable = pte_flags(pte) & _PAGE_SOFTW2;
+		pte = pte_clear_flags(pte, _PAGE_SOFTW4 | _PAGE_SOFTW2);
+
+		if (writable)
+			pte = pte_set_flags(_PAGE_RW);
+	}
+
+	return pte;
+}
+
+static inline pte_t pte_preserve_tocttou(pte_t oldpte, pte_t ptent)
+{
+	if (pte_rmarked(oldpte)) {
+		pte_rmark(ptent);
+	}
+
+	return ptent;
 }
 
 static inline pte_t pte_rtos_mark(pte_t pte)

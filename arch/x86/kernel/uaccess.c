@@ -8,7 +8,7 @@
 #include <linux/mm.h>
 #include "../../mm/internal.h"
 
-#ifdef CONFIG_TOCTTOU_PROTECTION && !INLINE_COPY_FROM_USER
+#if defined (CONFIG_TOCTTOU_PROTECTION) && !defined(INLINE_COPY_FROM_USER)
 __must_check unsigned long
 _copy_from_user(void *to, const void __user *from, unsigned long n)
 {
@@ -79,7 +79,7 @@ _mark_user_pages_read_only(const void __user *from, unsigned long n)
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
 
-#define TOCTTOU_MUTEX_BITS 12
+#define TOCTTOU_MUTEX_BITS 4
 #define NUM_TOCTTOU_MUTEXES (1 << TOCTTOU_MUTEX_BITS)
 #define TOCTTOU_MUTEX_MASK (NUM_TOCTTOU_MUTEXES - 1)
 
@@ -88,6 +88,7 @@ struct list_head tocttou_global_structs[NUM_TOCTTOU_MUTEXES];
 void *tocttou_page_data_cache;
 void *tocttou_node_cache;
 void *tocttou_file_cache;
+void *tocttou_deferred_write_cache;
 
 void inline tocttou_mutex_init(void)
 {
@@ -104,6 +105,7 @@ void inline tocttou_cache_init(void)
 	tocttou_page_data_cache = kmem_cache_create("tocttou_page_data", sizeof(struct tocttou_page_data), 0, 0, NULL);
 	tocttou_node_cache = kmem_cache_create("tocttou_node", sizeof(struct tocttou_marked_node), 0, 0, NULL);
 	tocttou_file_cache = kmem_cache_create("tocttou_file_node", sizeof(struct tocttou_marked_file), 0, 0, NULL);
+	tocttou_deferred_write_cache = kmem_cache_create("tocttou_deferred_write", sizeof(struct tocttou_deferred_write_node), 0, 0, NULL);
 }
 EXPORT_SYMBOL(tocttou_cache_init);
 
@@ -120,6 +122,16 @@ void inline unlock_tocttou_mutex(struct page *page)
 	mutex_unlock(&tocttou_global_mutexes[idx]);
 }
 EXPORT_SYMBOL(unlock_tocttou_mutex);
+
+struct tocttou_deferred_write_node *tocttou_deferred_write_alloc()
+{
+	return (struct tocttou_deferred_write_node *) kmem_cache_alloc(tocttou_deferred_write_cache, GFP_KERNEL);
+}
+
+void tocttou_deferred_write_free(struct tocttou_deferred_write_node * data)
+{
+	kmem_cache_free(tocttou_deferred_write_cache, data);
+}
 
 struct tocttou_page_data* tocttou_page_data_alloc()
 {
@@ -271,9 +283,12 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
 	// Find the PTE which maps the address
 	//
 	while (page_vma_mapped_walk(&pvmw)) {
+		struct interval_tree_node *new_range = tocttou_interval_alloc();
+		mutex_lock(&vma->vm_mm->marked_ranges_mutex);
+		add_marked_range(new_range, vma->vm_mm->marked_ranges_root);
+		mutex_unlock(&vma->vm_mm->marked_ranges_mutex);
 		pte_t * ppte = pvmw.pte;
-
-		set_pte_at(vma->vm_mm, pvmw.address, ppte, pte_userprotect(*ppte));
+		set_pte_at(vma->vm_mm, pvmw.address, ppte, pte_rmark(*ppte));
 
 		// Flush the TLB for every page
 		//
@@ -304,21 +319,18 @@ static bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
 		struct permission_refs_node *iter;
 		pte_t * ppte = pvmw.pte;
 
-		// Implement R and S unmarking 
-
+		// R unmarking
 		entry = READ_ONCE(*ppte);
-		unsigned smarked = !pte_user(entry);
-		unsigned rmarked = !pte_rmarked(entry);
+		unsigned rmarked = pte_rmarked(entry);
 		
-		if (!smarked && !rmarked) {
+		if (!rmarked) {
 			continue;
 		}
-		if (smarked) {
-			set_pte_at(vma->vm_mm, pvmw.address, pvmw.pte, pte_mkuser(entry));
-		} else if (rmarked) {
-			pte_t temp = pte_rtos_mark(*pvmw.pte);
-			set_pte_at(vma->vm_mm, pvmw.address, pvmw.pte, pte_mkuser(entry));
-		}
+		
+		mutex_lock
+		pte_t temp = pte_runmark(*pvmw.pte);
+		set_pte_at(vma->vm_mm, pvmw.address, pvmw.pte, temp);
+	
 		// Flush the TLB for every page
 		//
 		flush_tlb_page(vma, address);
@@ -427,7 +439,7 @@ retry:
 
 	temp = &current->marked_pages_list;
 
-	if (!pte_user(*ptep) || pte_rmarked(*ptep)) {
+	if (pte_rmarked(*ptep)) {
 	// Check if we have already locked this page
 	//
 		list_for_each_entry(iter, temp, other_nodes) {
@@ -469,8 +481,10 @@ retry:
 			spinlock_t *ptl = pte_lockptr(current->mm, pmd);
 			spin_lock(ptl);
 			entry = READ_ONCE(*ptep);
-			if (!pte_user(entry) || !pte_rmarked(entry))
-				set_pte_at(current->mm, vaddr, ptep, pte_userprotect(entry));
+
+			// If the pte hasn't been marked already
+			if (!(pte_smarked(entry) || pte_rmarked(entry)))
+				set_pte_at(current->mm, vaddr, ptep, (pte_wrprotect(entry)));
 			spin_unlock(ptl);
 			flush_tlb_page(vma, vaddr);
 			update_mmu_cache(vma, vaddr, ptep);
@@ -494,6 +508,21 @@ void lock_page_from_va(unsigned long addr) {}
 #endif
 EXPORT_SYMBOL(lock_page_from_va);
 
+#ifdef CONFIG_TOCTTOU_PROTECTION
+void tocttou_perform_deferred_writes()
+{
+	struct tocttou_deferred_write_node *iter, *temp;
+	struct list_node *list = &curent->tocttou_deferred_writes_list;
+
+	list_for_each_entry_safe(iter, temp, list, other_nodes) {
+		copy_to_user(iter->address, iter->data, iter->length);
+		list_del(&iter->other_nodes);
+		kfree(iter->data);
+		tocttou_deferred_write_free(iter);
+	}
+}
+EXPORT_SYMBOL(tocttou_perform_deferred_writes);
+#endif
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
 void unlock_pages_from_page_frame(struct page* target_page)

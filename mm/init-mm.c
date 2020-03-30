@@ -36,5 +36,7 @@ struct mm_struct init_mm = {
 	.mmlist		= LIST_HEAD_INIT(init_mm.mmlist),
 	.user_ns	= &init_user_ns,
 	.cpu_bitmap	= CPU_BITS_NONE,
+	.marked_ranges_root = RB_ROOT_CACHED,
+	.marked_ranges_mutex = mutex_init(&init_mm.marked_ranges_mutex),
 	INIT_MM_CONTEXT(init_mm)
 };
