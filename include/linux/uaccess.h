@@ -219,8 +219,8 @@ static __always_inline unsigned long __must_check
 copy_to_user(void __user *to, const void *from, unsigned long n)
 {
 	if (likely(check_copy_size(from, n, true))) {
-		unsigned long start_page_addr;
-		unsigned long end_page_addr;
+		unsigned long start;
+		unsigned long end;
 
 		unsigned long write_to;
 		unsigned long read_from;
@@ -230,54 +230,67 @@ copy_to_user(void __user *to, const void *from, unsigned long n)
 		unsigned long result;
 
 
-		start_page_addr = (unsigned long) to;
-		start_page_addr |= ~PAGE_MASK;
+		write_to = (unsigned long) to;
+		read_from = (unsigned long) from;
 
-		end_page_addr = (unsigned long) to + n;
-		end_page_addr |= ~PAGE_MASK;
+		start = (unsigned long) to;
+		end = (unsigned long) to + n;
 
 		bytes_left = n;
-		result = 0;
 
-		for (unsigned long addr = start_page_addr, iter_no = 0; addr <= end_page_addr; addr += PAGE_SIZE, iter_no++) {
-			interval_tree_node *check;
+		mutex_lock(current->mm->marked_ranges_mutex);
+		check = interval_tree_iter_first(current->mm->marked_ranges_root, start, end);
 
-			if (!iter_no) {
-				write_to = to;
-				read_from = from;
-				chunk_bytes = PAGE_SIZE - (write_to - start_page_addr);
-			} else {
-				write_to = addr;
-				read_from = from;
-				chunk_bytes = (bytes_left > PAGE_SIZE) ? PAGE_SIZE : bytes_left;
+		while (check) {
+			
+			if (write_to < check->start) {
+				unsigned long local_end = min(end, check->start);
+				unsigned long write_length = local_end - write_to;
+
+				_copy_to_user(write_to, read_from, write_length);
+				write_to += write_length;
+				read_from += write_length;
+				bytes_left -= write_length;
 			}
 
-			mutex_lock(current->mm->marked_ranges_mutex);
-			check = interval_tree_iter_first(current->mm->marked_ranges_root, write_to, write_to + (chunk_bytes - 1));
-
-			/* Copy the corresponding data chunk */
-			if (!check) {
-				result += _copy_to_user(write_to, read_from, chunk_bytes);
-			} else {
+			{
 				struct tocttou_deferred_write *new_node;
-				void* temp_data = kmalloc(chunk_bytes, GFP_KERNEL);
+				unsigned long local_end = min(end, check->end + 1);
+				unsigned long write_length = local_end - write_to;
+
+				void* temp_data = kmalloc(write_length, GFP_KERNEL);
+
+				memcpy(temp_data, read_from, chunk_bytes);
 
 				new_node = tocttou_deferred_write_alloc();
 				new_node->address = write_to;
-				new_node->length = chunk_bytes;
+				new_node->length = write_length;
 				new_node->data = temp_data;
 
 				list_add_tail(&new_node->other_nodes, &current->deferred_writes_list);
-				
-				result += chunk_bytes;
-				
+
+				write_to += write_length;
+				read_from += write_length;
 			}
 
-			mutex_unlock(current->mm->marked_ranges_mutex);
+			check = interval_tree_iter_next(check, start, end);
 		}
-		n = _copy_to_user(to, from, n);
+
+		if (write_to < end) {
+			unsigned long local_end = min(end, check->start);
+			unsigned long write_length = local_end - write_to;
+
+			_copy_to_user(write_to, read_from, write_length);
+			write_to += write_length;
+			read_from += write_length;
+			bytes_left -= write_length;
+		}
+
+		BUG_ON(bytes_left != 0 && "some bytes weren't copied over");
+		BUG_ON(read_from != write_to && "some bytes weren't copied over");
+
 	}
-	return n;
+	return n - bytes_left;
 }
 #ifdef CONFIG_COMPAT
 static __always_inline unsigned long __must_check

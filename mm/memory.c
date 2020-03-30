@@ -3334,7 +3334,7 @@ vm_fault_t alloc_set_pte(struct vm_fault *vmf, struct mem_cgroup *memcg,
 	 * that thread will wait, until we are finished with our marking.
 	 */
 	if (is_page_tocttou(page))
-		entry = pte_userprotect(entry);
+		entry = pte_rmark(entry);
 #endif
 
 	set_pte_at(vma->vm_mm, vmf->address, vmf->pte, entry);
@@ -3888,15 +3888,14 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
 	accessed_page = pte_page(vmf->orig_pte);
-	unsigned smarked = !pte_user(vmf->orig_pte);
-	unsigned rmarked = !pte_rmarked(vmf->orig_pte);
+	unsigned rmarked = pte_rmarked(vmf->orig_pte);
 	unsigned write = pte_write(vmf->orig_pte);
 
-	if ((vmf->flags & FAULT_FLAG_PROTECTION) && !(vmf->flags & FAULT_FLAG_WRITE) && !(vmf->flags & FAULT_FLAG_USER) && !rmarked)
+	if ((vmf->flags & FAULT_FLAG_PROTECTION) && !(vmf->flags & FAULT_FLAG_WRITE) && !rmarked)
 		return VM_FAULT_PROTECTION;
 
 	// We wait if the page is marked
-	if (is_page_tocttou(accessed_page) && (smarked || rmarked) && (vmf->flags & FAULT_FLAG_DO_TOCTTOU)) {
+	if (is_page_tocttou(accessed_page) && rmarked && (vmf->flags & FAULT_FLAG_DO_TOCTTOU)) {
 		struct tocttou_page_data *markings;
 		
 		lock_tocttou_mutex(accessed_page);
@@ -3907,34 +3906,6 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 			pte_unmap(vmf->pte);
 			unlock_tocttou_mutex(accessed_page);
 		} else {
-
-			// If we are in user-mode, and we try to read from an S-marked page
-			// we will convert it to an R-marked page an continue with the read
-			//
-			// Actual reads of the kernel memory get caught earlier
-			//
-			if ((vmf->flags & FAULT_FLAG_USER) && !(vmf->flags & FAULT_FLAG_WRITE) && smarked) {
-				pte_t temp = pte_stor_mark(vmf->orig_pte);
-				set_pte_at(vmf->vma->vm_mm, vmf->address, vmf->pte, temp);
-				pte_unmap(vmf->pte);
-				unlock_tocttou_mutex(accessed_page);
-				return VM_FAULT_MAJOR;
-			}
-
-			// If we are in kernel-mode, and we are trying to write to an R-marked page
-			// we will convert it to an S-marked page and continue with the write
-			//
-			// If the write isn't actually allowed, we will refault and issue a SEGFAULT
-			//
-			if (!(vmf->flags & FAULT_FLAG_USER) && rmarked && (vmf->flags & FAULT_FLAG_WRITE)) {
-				pte_t temp = pte_rtos_mark(vmf->orig_pte);
-				set_pte_at(vmf->vma->vm_mm, vmf->address, vmf->pte, temp);
-				pte_unmap(vmf->pte);
-				unlock_tocttou_mutex(accessed_page);
-				return VM_FAULT_MAJOR;
-			}
-
-
 			pte_unmap(vmf->pte);
 			markings->guests++;
 			
