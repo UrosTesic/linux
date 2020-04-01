@@ -6,8 +6,85 @@
 #include <linux/slab.h>
 #include <linux/rmap.h>
 #include <linux/mm.h>
+#include <linux/interval_tree.h>
 #include "../../mm/internal.h"
 
+unsigned long __must_check
+copy_to_user(void __user *to, const void *from, unsigned long n)
+{
+	unsigned long bytes_left;
+
+	if (likely(check_copy_size(from, n, true))) {
+		unsigned long start;
+		unsigned long end;
+		unsigned long write_to;
+		unsigned long read_from;
+		struct interval_tree_node *check;
+
+
+		write_to = (unsigned long) to;
+		read_from = (unsigned long) from;
+
+		start = (unsigned long) to;
+		end = (unsigned long) to + n;
+
+		bytes_left = n;
+
+		mutex_lock(&current->mm->marked_ranges_mutex);
+		check = interval_tree_iter_first(&current->mm->marked_ranges_root, start, end);
+
+		while (check) {
+			
+			if (write_to < check->start) {
+				unsigned long local_end = min(end, check->start);
+				unsigned long write_length = local_end - write_to;
+
+				_copy_to_user((void *)write_to, (void *) read_from, write_length);
+				write_to += write_length;
+				read_from += write_length;
+				bytes_left -= write_length;
+			}
+
+			{
+				struct tocttou_deferred_write *new_node;
+				unsigned long local_end = min(end, check->last + 1);
+				unsigned long write_length = local_end - write_to;
+
+				void* temp_data = kmalloc(write_length, GFP_KERNEL);
+
+				memcpy(temp_data, (void*) read_from, write_length);
+
+				new_node = tocttou_deferred_write_alloc();
+				new_node->address = write_to;
+				new_node->length = write_length;
+				new_node->data = temp_data;
+
+				list_add_tail(&new_node->other_nodes, &current->deferred_writes_list);
+
+				write_to += write_length;
+				read_from += write_length;
+			}
+
+			check = interval_tree_iter_next(check, start, end);
+		}
+
+		if (write_to < end) {
+			unsigned long local_end = min(end, check->start);
+			unsigned long write_length = local_end - write_to;
+
+			_copy_to_user((void *) write_to, (void *) read_from, write_length);
+			write_to += write_length;
+			read_from += write_length;
+			bytes_left -= write_length;
+		}
+
+		BUG_ON(bytes_left != 0 && "some bytes weren't copied over");
+		BUG_ON(read_from != write_to && "some bytes weren't copied over");
+
+	}
+	return n - bytes_left;
+}
+EXPORT_SYMBOL(copy_to_user);
 #if defined (CONFIG_TOCTTOU_PROTECTION) && !defined(INLINE_COPY_FROM_USER)
 __must_check unsigned long
 _copy_from_user(void *to, const void __user *from, unsigned long n)
@@ -89,6 +166,7 @@ void *tocttou_page_data_cache;
 void *tocttou_node_cache;
 void *tocttou_file_cache;
 void *tocttou_deferred_write_cache;
+void *tocttou_interval_cache;
 
 void inline tocttou_mutex_init(void)
 {
@@ -105,7 +183,8 @@ void inline tocttou_cache_init(void)
 	tocttou_page_data_cache = kmem_cache_create("tocttou_page_data", sizeof(struct tocttou_page_data), 0, 0, NULL);
 	tocttou_node_cache = kmem_cache_create("tocttou_node", sizeof(struct tocttou_marked_node), 0, 0, NULL);
 	tocttou_file_cache = kmem_cache_create("tocttou_file_node", sizeof(struct tocttou_marked_file), 0, 0, NULL);
-	tocttou_deferred_write_cache = kmem_cache_create("tocttou_deferred_write", sizeof(struct tocttou_deferred_write_node), 0, 0, NULL);
+	tocttou_deferred_write_cache = kmem_cache_create("tocttou_deferred_write", sizeof(struct tocttou_deferred_write), 0, 0, NULL);
+	tocttou_interval_cache = kmem_cache_create("tocttou_interval", sizeof(struct interval_tree_node), 0, 0, NULL);
 }
 EXPORT_SYMBOL(tocttou_cache_init);
 
@@ -123,12 +202,21 @@ void inline unlock_tocttou_mutex(struct page *page)
 }
 EXPORT_SYMBOL(unlock_tocttou_mutex);
 
-struct tocttou_deferred_write_node *tocttou_deferred_write_alloc()
+struct interval_tree_node * tocttou_interval_alloc()
 {
-	return (struct tocttou_deferred_write_node *) kmem_cache_alloc(tocttou_deferred_write_cache, GFP_KERNEL);
+	return (struct interval_tree_node *) kmem_cache_alloc(tocttou_interval_cache, GFP_KERNEL);
 }
 
-void tocttou_deferred_write_free(struct tocttou_deferred_write_node * data)
+void tocttou_interval_free(struct interval_tree_node *node)
+{
+	kmem_cache_free(tocttou_interval_cache, node);
+}
+struct tocttou_deferred_write *tocttou_deferred_write_alloc()
+{
+	return (struct tocttou_deferred_write *) kmem_cache_alloc(tocttou_deferred_write_cache, GFP_KERNEL);
+}
+
+void tocttou_deferred_write_free(struct tocttou_deferred_write * data)
 {
 	kmem_cache_free(tocttou_deferred_write_cache, data);
 }
@@ -285,7 +373,7 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
 	while (page_vma_mapped_walk(&pvmw)) {
 		struct interval_tree_node *new_range = tocttou_interval_alloc();
 		mutex_lock(&vma->vm_mm->marked_ranges_mutex);
-		add_marked_range(new_range, vma->vm_mm->marked_ranges_root);
+		interval_tree_insert(new_range, &vma->vm_mm->marked_ranges_root);
 		mutex_unlock(&vma->vm_mm->marked_ranges_mutex);
 		pte_t * ppte = pvmw.pte;
 		set_pte_at(vma->vm_mm, pvmw.address, ppte, pte_rmark(*ppte));
@@ -317,6 +405,7 @@ static bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
 	//
 	while (page_vma_mapped_walk(&pvmw)) {
 		struct permission_refs_node *iter;
+		struct interval_tree_node * range;
 		pte_t * ppte = pvmw.pte;
 
 		// R unmarking
@@ -327,7 +416,6 @@ static bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
 			continue;
 		}
 		
-		mutex_lock
 		pte_t temp = pte_runmark(*pvmw.pte);
 		set_pte_at(vma->vm_mm, pvmw.address, pvmw.pte, temp);
 	
@@ -335,6 +423,13 @@ static bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
 		//
 		flush_tlb_page(vma, address);
 		update_mmu_cache(vma, address, ppte);
+		mutex_unlock(&vma->vm_mm->marked_ranges_mutex);
+
+		mutex_lock(&vma->vm_mm->marked_ranges_mutex);
+		range = interval_tree_iter_first(&vma->vm_mm->marked_ranges_root, address, address + PAGE_SIZE - 1);
+		BUG_ON(range == NULL && "range must be present");
+		interval_tree_remove(range, &vma->vm_mm->marked_ranges_root);
+		tocttou_interval_free(range);
 	}
 	return true;
 }
@@ -511,11 +606,11 @@ EXPORT_SYMBOL(lock_page_from_va);
 #ifdef CONFIG_TOCTTOU_PROTECTION
 void tocttou_perform_deferred_writes()
 {
-	struct tocttou_deferred_write_node *iter, *temp;
-	struct list_node *list = &curent->tocttou_deferred_writes_list;
+	struct tocttou_deferred_write *iter, *temp;
+	struct list_head *list = &current->deferred_writes_list;
 
 	list_for_each_entry_safe(iter, temp, list, other_nodes) {
-		copy_to_user(iter->address, iter->data, iter->length);
+		copy_to_user((void*)iter->address, iter->data, iter->length);
 		list_del(&iter->other_nodes);
 		kfree(iter->data);
 		tocttou_deferred_write_free(iter);

@@ -435,7 +435,7 @@ static inline pte_t pte_runmark(pte_t pte)
 		pte = pte_clear_flags(pte, _PAGE_SOFTW4 | _PAGE_SOFTW2);
 
 		if (writable)
-			pte = pte_set_flags(_PAGE_RW);
+			pte = pte_set_flags(pte, _PAGE_RW);
 	}
 
 	return pte;

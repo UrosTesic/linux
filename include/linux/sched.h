@@ -621,7 +621,7 @@ struct tocttou_deferred_write
 	void* data; /* Data we want to write */
 
 	struct list_head other_nodes; /* Other writes */
-}
+};
 
 union rcu_special {
 	struct {

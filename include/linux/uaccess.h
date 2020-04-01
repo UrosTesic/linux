@@ -9,9 +9,7 @@
 #define uaccess_kernel() segment_eq(get_fs(), KERNEL_DS)
 
 #include <asm/uaccess.h>
-// #include <asm/pgtable.h>
 #include <linux/mm_types.h>
-// #include <linux/swap.h>
 
 /*
  * Architectures should provide two primitives (raw_copy_{to,from}_user())
@@ -159,8 +157,10 @@ void unlock_tocttou_mutex(struct page*);
 void unlock_marked_pages(void);
 void tocttou_mutex_init(void);
 void tocttou_cache_init(void);
+struct tocttou_deferred_write *tocttou_deferred_write_alloc(void);
 struct tocttou_page_data* tocttou_page_data_alloc(void);
 void tocttou_page_data_free(struct tocttou_page_data* data);
+void tocttou_deferred_write_free(struct tocttou_deferred_write *);
 struct tocttou_marked_node* tocttou_node_alloc(void);
 void tocttou_node_free(struct tocttou_marked_node* data);
 void tocttou_file_write_start(struct file *file);
@@ -172,6 +172,9 @@ void tocttou_marked_file_free(struct tocttou_marked_file *data);
 void tocttou_unmark_all_files(void);
 int is_tocttou_marked(struct page *page);
 struct tocttou_page_data* get_page_markings(struct page*);
+void tocttou_perform_deferred_writes(void);
+struct interval_tree_node * tocttou_interval_alloc(void);
+void tocttou_interval_free(struct interval_tree_node *);
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
 #ifdef INLINE_COPY_FROM_USER
@@ -215,83 +218,10 @@ copy_from_user(void *to, const void __user *from, unsigned long n)
 }
 #endif
 
-static __always_inline unsigned long __must_check
-copy_to_user(void __user *to, const void *from, unsigned long n)
-{
-	if (likely(check_copy_size(from, n, true))) {
-		unsigned long start;
-		unsigned long end;
 
-		unsigned long write_to;
-		unsigned long read_from;
-		unsigned long bytes_left;
-		unsigned long chunk_bytes;
-		unsigned long iter_no;
-		unsigned long result;
+extern unsigned long __must_check
+copy_to_user(void __user *to, const void *from, unsigned long n);
 
-
-		write_to = (unsigned long) to;
-		read_from = (unsigned long) from;
-
-		start = (unsigned long) to;
-		end = (unsigned long) to + n;
-
-		bytes_left = n;
-
-		mutex_lock(current->mm->marked_ranges_mutex);
-		check = interval_tree_iter_first(current->mm->marked_ranges_root, start, end);
-
-		while (check) {
-			
-			if (write_to < check->start) {
-				unsigned long local_end = min(end, check->start);
-				unsigned long write_length = local_end - write_to;
-
-				_copy_to_user(write_to, read_from, write_length);
-				write_to += write_length;
-				read_from += write_length;
-				bytes_left -= write_length;
-			}
-
-			{
-				struct tocttou_deferred_write *new_node;
-				unsigned long local_end = min(end, check->end + 1);
-				unsigned long write_length = local_end - write_to;
-
-				void* temp_data = kmalloc(write_length, GFP_KERNEL);
-
-				memcpy(temp_data, read_from, chunk_bytes);
-
-				new_node = tocttou_deferred_write_alloc();
-				new_node->address = write_to;
-				new_node->length = write_length;
-				new_node->data = temp_data;
-
-				list_add_tail(&new_node->other_nodes, &current->deferred_writes_list);
-
-				write_to += write_length;
-				read_from += write_length;
-			}
-
-			check = interval_tree_iter_next(check, start, end);
-		}
-
-		if (write_to < end) {
-			unsigned long local_end = min(end, check->start);
-			unsigned long write_length = local_end - write_to;
-
-			_copy_to_user(write_to, read_from, write_length);
-			write_to += write_length;
-			read_from += write_length;
-			bytes_left -= write_length;
-		}
-
-		BUG_ON(bytes_left != 0 && "some bytes weren't copied over");
-		BUG_ON(read_from != write_to && "some bytes weren't copied over");
-
-	}
-	return n - bytes_left;
-}
 #ifdef CONFIG_COMPAT
 static __always_inline unsigned long __must_check
 copy_in_user(void __user *to, const void __user *from, unsigned long n)
