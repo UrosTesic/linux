@@ -1195,9 +1195,10 @@ access_error(unsigned long error_code, struct vm_area_struct *vma)
 	}
 
 
-	if (unlikely(error_code & X86_PF_PROT))
+	if (unlikely(error_code & X86_PF_PROT)) {
+		printk("Probalby TOCTTOU error!\n");
 		return 1;
-
+	}
 	/* read, not present: */
 	if (unlikely(!(vma->vm_flags & (VM_READ | VM_EXEC | VM_WRITE))))
 		return 1;

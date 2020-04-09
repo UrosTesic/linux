@@ -755,12 +755,13 @@ copy_one_pte(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 	 * in the parent and the child
 	 */
 
-	if (is_cow_mapping(vm_flags) && !pte_user(pte)) {
-		pte = pte_mkuser(pte);
-	}
-
-	if (is_cow_mapping(vm_flags) && pte_write(pte)) {
-			ptep_set_wrprotect(src_mm, addr, src_pte);
+	if (is_cow_mapping(vm_flags) && (pte_write(pte) || pte_rmarked_write(pte))) {
+			if (!pte_rmarked_write(pte)) {
+				ptep_set_wrprotect(src_mm, addr, src_pte);
+			} else {
+				ptep_set_rmarked_wrprotect(src_mm, addr, src_pte);
+				pte = pte_runmark(pte);
+			}
 			pte = pte_wrprotect(pte);
 	}
 
@@ -3891,6 +3892,9 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 	unsigned rmarked = pte_rmarked(vmf->orig_pte);
 	unsigned write = pte_write(vmf->orig_pte);
 
+	if (is_page_tocttou(accessed_page))
+		printk(KERN_ERR"TOCTTOU Page Faulted Access: %u %ld", current->pid, current->op_code);
+
 	if ((vmf->flags & FAULT_FLAG_PROTECTION) && !(vmf->flags & FAULT_FLAG_WRITE) && !rmarked)
 		return VM_FAULT_PROTECTION;
 
@@ -3911,9 +3915,9 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 			
 			unlock_tocttou_mutex(accessed_page);
 			up_read(&current->mm->mmap_sem);
-			//printk(KERN_ERR "Wait: PID: %lx Page: %lx Flags: %x Anonymous: %x PTE user: %x PTE write: %x No threads: %x Op code: %ld\n", (unsigned long) task_pid_nr(current), (unsigned long) accessed_page, vmf->flags, vma_is_anonymous(vmf->vma), (unsigned) !smarked, write, get_nr_threads(current), markings->op_code);
+			printk(KERN_ERR "Wait: PID: %lx Page: %lx Flags: %x Anonymous: %x Rmarked: %x PTE write: %x No threads: %x Op code: %ld\n", (unsigned long) task_pid_nr(current), (unsigned long) accessed_page, vmf->flags, vma_is_anonymous(vmf->vma), (unsigned) rmarked, write, get_nr_threads(current), markings->op_code);
 			wait_for_completion(&markings->unmarking_completed);
-			//printk(KERN_ERR "Continue: %lx %lx\n", (unsigned long) task_pid_nr(current), (unsigned long) accessed_page);
+			printk(KERN_ERR "Continue: %lx %lx\n", (unsigned long) task_pid_nr(current), (unsigned long) accessed_page);
 			down_read(&current->mm->mmap_sem);
 			lock_tocttou_mutex(accessed_page);
 

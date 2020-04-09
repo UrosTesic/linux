@@ -186,22 +186,17 @@ static inline int pte_write(pte_t pte)
 
 static inline int pte_rmarked(pte_t pte)
 {
-	return pte_flags(pte) & _PAGE_SOFTW4;
+	return pte_flags(pte) & _PAGE_TOCTTOU_MARKED;
 }
 
 static inline int pte_savedwrite(pte_t pte)
 {
-	return pte_flags(pte) & _PAGE_SOFTW2;
+	return pte_flags(pte) & _PAGE_TOCTTOU_OLD;
 }
 
 static inline int pte_user(pte_t pte)
 {
 	return pte_flags(pte) & _PAGE_USER;
-}
-
-static inline int pte_smarked(pte_t pte)
-{
-	return !pte_user(pte);
 }
 
 static inline int pte_huge(pte_t pte)
@@ -405,23 +400,14 @@ static inline pte_t pte_mkdevmap(pte_t pte)
 	return pte_set_flags(pte, _PAGE_SPECIAL|_PAGE_DEVMAP);
 }
 
-static inline pte_t pte_stor_mark(pte_t pte)
-{
-	pte_t temp = pte_set_flags(pte, _PAGE_USER | _PAGE_SOFTW4);
-	if (pte_write(pte)) {
-		temp = pte_set_flags(temp, _PAGE_SOFTW2);
-	}
-	temp = pte_clear_flags(temp, _PAGE_RW);
-	return temp;
-}
 
 static inline pte_t pte_rmark(pte_t pte)
 {
-	pte_t temp = pte_set_flags(pte, _PAGE_SOFTW4);
-	temp = pte_clear_flags(pte, _PAGE_SOFTW2);
+	pte_t temp = pte_set_flags(pte, _PAGE_TOCTTOU_MARKED);
+	temp = pte_clear_flags(temp, _PAGE_TOCTTOU_OLD);
 
 	if (pte_write(pte)) {
-		temp = pte_set_flags(temp, _PAGE_SOFTW2);
+		temp = pte_set_flags(temp, _PAGE_TOCTTOU_OLD);
 		temp = pte_clear_flags(temp, _PAGE_RW);
 	}
 
@@ -431,14 +417,21 @@ static inline pte_t pte_rmark(pte_t pte)
 static inline pte_t pte_runmark(pte_t pte)
 {
 	if (pte_rmarked(pte)) {
-		int writable = pte_flags(pte) & _PAGE_SOFTW2;
-		pte = pte_clear_flags(pte, _PAGE_SOFTW4 | _PAGE_SOFTW2);
+		int writable = pte_flags(pte) & _PAGE_TOCTTOU_OLD;
+		pte = pte_clear_flags(pte, _PAGE_TOCTTOU_MARKED | _PAGE_TOCTTOU_OLD);
 
 		if (writable)
 			pte = pte_set_flags(pte, _PAGE_RW);
 	}
 
 	return pte;
+}
+
+static inline int pte_rmarked_write(pte_t pte)
+{
+	if (!pte_rmarked(pte)) return 0;
+
+	return pte_flags(pte) & _PAGE_TOCTTOU_OLD;
 }
 
 static inline pte_t pte_preserve_tocttou(pte_t oldpte, pte_t ptent)
@@ -448,17 +441,6 @@ static inline pte_t pte_preserve_tocttou(pte_t oldpte, pte_t ptent)
 	}
 
 	return ptent;
-}
-
-static inline pte_t pte_rtos_mark(pte_t pte)
-{
-	pte_t temp = pte_clear_flags(pte, _PAGE_USER | _PAGE_SOFTW4);
-	if (pte_savedwrite(pte)) {
-		temp = pte_set_flags(temp, _PAGE_RW);
-		temp = pte_clear_flags(temp, _PAGE_SOFTW2);
-	}
-
-	return temp;
 }
 
 static inline pmd_t pmd_set_flags(pmd_t pmd, pmdval_t set)
@@ -1233,6 +1215,12 @@ static inline void ptep_set_wrprotect(struct mm_struct *mm,
 				      unsigned long addr, pte_t *ptep)
 {
 	clear_bit(_PAGE_BIT_RW, (unsigned long *)&ptep->pte);
+}
+
+static inline void ptep_set_rmarked_wrprotect(struct mm_struct *mm,
+				      unsigned long addr, pte_t *ptep)
+{
+	clear_bit(_PAGE_BIT_TOCTTOU_OLD, (unsigned long *)&ptep->pte);
 }
 
 #define flush_tlb_fix_spurious_fault(vma, address) do { } while (0)

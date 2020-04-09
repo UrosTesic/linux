@@ -245,7 +245,7 @@ extern void __put_user_8(void);
  *
  * Return: zero on success, or -EFAULT on error.
  */
-#define put_user(x, ptr)					\
+/*#define put_user(x, ptr)					\
 ({								\
 	int __ret_pu;						\
 	__typeof__(*(ptr)) __pu_val;				\
@@ -270,7 +270,14 @@ extern void __put_user_8(void);
 		break;						\
 	}							\
 	__builtin_expect(__ret_pu, 0);				\
-})
+})*/
+static unsigned long copy_to_user(void __user *to, const void *from, unsigned long n);
+static int copy_to_user_adapter(unsigned long x, size_t length, void* __user ptr) 
+{
+	return copy_to_user(ptr, &x, length) == 0 ? 0 : -EFAULT;
+}
+
+#define put_user(x, ptr) copy_to_user_adapter((unsigned long) x, sizeof(*ptr), ptr)
 
 #define __put_user_size(x, ptr, size, label)				\
 do {									\
@@ -558,9 +565,17 @@ struct __large_struct { unsigned long buf[100]; };
  * Return: zero on success, or -EFAULT on error.
  */
 
-#define __put_user(x, ptr)						\
-	__put_user_nocheck((__typeof__(*(ptr)))(x), (ptr), sizeof(*(ptr)))
+/*#define __put_user(x, ptr)						\
+	__put_user_nocheck((__typeof__(*(ptr)))(x), (ptr), sizeof(*(ptr)))*/
 
+static unsigned long __copy_to_user(void __user *to, const void *from, unsigned long n);
+
+inline static int __copy_to_user_adapter(unsigned long x, size_t length, void* __user ptr)
+{
+	return __copy_to_user(ptr, &x, length) == 0 ? 0 : -EFAULT;
+}
+
+#define __put_user(x, ptr) __copy_to_user_adapter((unsigned long) x, sizeof(*ptr), ptr)
 /*
  * {get|put}_user_try and catch
  *

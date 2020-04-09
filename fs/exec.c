@@ -1012,7 +1012,6 @@ static int exec_mmap(struct mm_struct *mm)
 	struct task_struct *tsk;
 	struct mm_struct *old_mm, *active_mm;
 
-	unlock_marked_pages();
 	/* Notify parent that we're no longer interested in the old VM */
 	tsk = current;
 	old_mm = current->mm;

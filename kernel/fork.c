@@ -1289,6 +1289,8 @@ static int wait_for_vfork_done(struct task_struct *child,
  */
 void mm_release(struct task_struct *tsk, struct mm_struct *mm)
 {
+	unlock_marked_pages();
+
 	/* Get rid of any futexes when releasing the mm */
 #ifdef CONFIG_FUTEX
 	if (unlikely(tsk->robust_list)) {
@@ -2118,6 +2120,8 @@ static __latent_entropy struct task_struct *copy_process(
 	p->task_works = NULL;
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
+	mutex_init(&p->deferred_writes_mutex);
+	INIT_LIST_HEAD(&p->deferred_writes_list);
 	INIT_LIST_HEAD(&p->marked_pages_list);
 	INIT_LIST_HEAD(&p->marked_files_list);
 	p->tocttou_mutex_taken = 0;

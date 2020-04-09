@@ -32,6 +32,8 @@
 
 #define _PAGE_BIT_SPECIAL	_PAGE_BIT_SOFTW1
 #define _PAGE_BIT_CPA_TEST	_PAGE_BIT_SOFTW1
+#define _PAGE_BIT_TOCTTOU_OLD _PAGE_BIT_SOFTW2
+#define _PAGE_BIT_TOCTTOU_MARKED _PAGE_BIT_SOFTW3
 #define _PAGE_BIT_SOFT_DIRTY	_PAGE_BIT_SOFTW3 /* software dirty tracking */
 #define _PAGE_BIT_DEVMAP	_PAGE_BIT_SOFTW4
 
@@ -67,6 +69,9 @@
 #define _PAGE_PKEY_BIT2	(_AT(pteval_t, 0))
 #define _PAGE_PKEY_BIT3	(_AT(pteval_t, 0))
 #endif
+
+#define _PAGE_TOCTTOU_OLD (_AT(pteval_t, 1) << _PAGE_BIT_TOCTTOU_OLD)
+#define _PAGE_TOCTTOU_MARKED (_AT(pteval_t, 1) << _PAGE_BIT_TOCTTOU_MARKED)
 
 #define _PAGE_PKEY_MASK (_PAGE_PKEY_BIT0 | \
 			 _PAGE_PKEY_BIT1 | \

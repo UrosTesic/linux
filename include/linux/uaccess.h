@@ -212,15 +212,22 @@ copy_from_user(void *to, const void __user *from, unsigned long n)
 static __always_inline __must_check unsigned long
 copy_from_user(void *to, const void __user *from, unsigned long n)
 {
+	//printk(KERN_ERR"%u Copy_from_user Start\n", current->pid);
 	if (likely(check_copy_size(to, n, false)))
 		n = _copy_from_user(to, from, n);
+	//printk(KERN_ERR"%u Copy_from_user End\n", current->pid);
 	return n;
 }
 #endif
 
 
-extern unsigned long __must_check
-copy_to_user(void __user *to, const void *from, unsigned long n);
+static __always_inline unsigned long __must_check
+copy_to_user(void __user *to, const void *from, unsigned long n)
+{
+	if (likely(check_copy_size(from, n, true)))
+		n = _copy_to_user(to, from, n);
+	return n;
+}
 
 #ifdef CONFIG_COMPAT
 static __always_inline unsigned long __must_check

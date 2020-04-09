@@ -1053,7 +1053,8 @@ static inline __must_check bool try_get_page(struct page *page)
 }
 
 static inline void put_page(struct page *page)
-{
+{	
+	BUG_ON(is_page_tocttou(page));
 	page = compound_head(page);
 
 	/*

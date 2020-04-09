@@ -285,6 +285,7 @@ __visible void do_syscall_64(unsigned long nr, struct pt_regs *regs)
 	ti = current_thread_info();
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
+	printk(KERN_ERR"%u Enter %lu\n", current->pid, nr);
 	current->tocttou_syscall = 0;
 	current->op_code = nr;
 #endif
@@ -308,6 +309,7 @@ __visible void do_syscall_64(unsigned long nr, struct pt_regs *regs)
 #ifdef CONFIG_TOCTTOU_PROTECTION
 	current->tocttou_syscall = 0;
 	current->op_code = -1;
+	printk(KERN_ERR"%u Exit %lu\n", current->pid, nr);
 #endif
 
 	syscall_return_slowpath(regs);

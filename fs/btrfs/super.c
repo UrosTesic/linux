@@ -2396,13 +2396,17 @@ static int __init init_btrfs_fs(void)
 
 	btrfs_print_mod_info();
 
+	printk(KERN_ERR "BTRFS Loaded\n");
 	err = btrfs_run_sanity_tests();
 	if (err)
 		goto unregister_ioctl;
 
+	printk(KERN_ERR "BTRFS Tested\n");
 	err = register_filesystem(&btrfs_fs_type);
 	if (err)
 		goto unregister_ioctl;
+
+	printk(KERN_ERR "BTRFS Registered\n");
 
 	return 0;
 

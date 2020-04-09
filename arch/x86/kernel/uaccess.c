@@ -8,30 +8,30 @@
 #include <linux/mm.h>
 #include <linux/interval_tree.h>
 #include "../../mm/internal.h"
+#include <uapi/asm/unistd_64.h>
 
-unsigned long __must_check
-copy_to_user(void __user *to, const void *from, unsigned long n)
+__attribute__((optimize("-Og"))) unsigned long __must_check
+raw_copy_to_user(void __user *to, const void *from, unsigned long n)
 {
 	unsigned long bytes_left;
+	unsigned long start;
+	unsigned long end;
+	unsigned long write_to;
+	unsigned long read_from;
+	struct interval_tree_node *check;
 
-	if (likely(check_copy_size(from, n, true))) {
-		unsigned long start;
-		unsigned long end;
-		unsigned long write_to;
-		unsigned long read_from;
-		struct interval_tree_node *check;
+	//printk(KERN_ERR"%u Copy_to_user Start\n", current->pid);
+	write_to = (unsigned long) to;
+	read_from = (unsigned long) from;
 
+	start = (unsigned long) to;
+	end = (unsigned long) to + n;
 
-		write_to = (unsigned long) to;
-		read_from = (unsigned long) from;
+	bytes_left = n;
 
-		start = (unsigned long) to;
-		end = (unsigned long) to + n;
-
-		bytes_left = n;
-
+	if (false && current->mm && current->op_code != -1) {
 		mutex_lock(&current->mm->marked_ranges_mutex);
-		check = interval_tree_iter_first(&current->mm->marked_ranges_root, start, end);
+		check = interval_tree_iter_first(&current->mm->marked_ranges_root, start, end-1);
 
 		while (check) {
 			
@@ -39,7 +39,7 @@ copy_to_user(void __user *to, const void *from, unsigned long n)
 				unsigned long local_end = min(end, check->start);
 				unsigned long write_length = local_end - write_to;
 
-				_copy_to_user((void *)write_to, (void *) read_from, write_length);
+				write_length = __raw_copy_to_user((void *)write_to, (void *) read_from, write_length);
 				write_to += write_length;
 				read_from += write_length;
 				bytes_left -= write_length;
@@ -63,28 +63,28 @@ copy_to_user(void __user *to, const void *from, unsigned long n)
 
 				write_to += write_length;
 				read_from += write_length;
+				bytes_left -= write_length;
 			}
 
-			check = interval_tree_iter_next(check, start, end);
+			check = interval_tree_iter_next(check, start, end-1);
 		}
-
-		if (write_to < end) {
-			unsigned long local_end = min(end, check->start);
-			unsigned long write_length = local_end - write_to;
-
-			_copy_to_user((void *) write_to, (void *) read_from, write_length);
-			write_to += write_length;
-			read_from += write_length;
-			bytes_left -= write_length;
-		}
-
-		BUG_ON(bytes_left != 0 && "some bytes weren't copied over");
-		BUG_ON(read_from != write_to && "some bytes weren't copied over");
-
+		mutex_unlock(&current->mm->marked_ranges_mutex);
 	}
+
+	if (write_to < end) {
+		unsigned long write_length = end - write_to;
+
+		write_length = __raw_copy_to_user((void *) write_to, (void *) read_from, write_length);
+		write_to += write_length;
+		read_from += write_length;
+		bytes_left -= write_length;
+	}
+
+	// uaccprintk(KERN_ERR"%u Copy_to_user End\n", current->pid);
 	return n - bytes_left;
 }
-EXPORT_SYMBOL(copy_to_user);
+EXPORT_SYMBOL(raw_copy_to_user);
+
 #if defined (CONFIG_TOCTTOU_PROTECTION) && !defined(INLINE_COPY_FROM_USER)
 __must_check unsigned long
 _copy_from_user(void *to, const void __user *from, unsigned long n)
@@ -112,6 +112,12 @@ _mark_user_pages_read_only(const void __user *from, unsigned long n)
 {
 	unsigned long address;
 	struct vm_area_struct *vma;
+
+	return;
+	
+	if (!current->pid)
+		return;
+
 	if (current->flags & PF_EXITING) {
 		return;
 	}
@@ -361,6 +367,7 @@ void tocttou_node_free(struct tocttou_marked_node* data) {}
 static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
 		     unsigned long address, void *arg)
 {
+	struct interval_tree_node **preallocated_range = (struct interval_tree_node **) arg;
 	struct page_vma_mapped_walk pvmw = {
 		.page = page,
 		.vma = vma,
@@ -370,11 +377,16 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
 	if (is_cow_mapping(vma->vm_flags)) return true;
 	// Find the PTE which maps the address
 	//
+	mutex_lock(&vma->vm_mm->marked_ranges_mutex);
 	while (page_vma_mapped_walk(&pvmw)) {
-		struct interval_tree_node *new_range = tocttou_interval_alloc();
-		mutex_lock(&vma->vm_mm->marked_ranges_mutex);
+		struct interval_tree_node *new_range = *preallocated_range;
+		*preallocated_range = NULL;
+		new_range->start = address;
+		new_range->last = address + PAGE_SIZE - 1;
+		// printk(KERN_ERR "Mark %u: %lx - %lx\n", current->pid, new_range->start, new_range->last);
+
+		
 		interval_tree_insert(new_range, &vma->vm_mm->marked_ranges_root);
-		mutex_unlock(&vma->vm_mm->marked_ranges_mutex);
 		pte_t * ppte = pvmw.pte;
 		set_pte_at(vma->vm_mm, pvmw.address, ppte, pte_rmark(*ppte));
 
@@ -383,11 +395,15 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
 		flush_tlb_page(vma, address);
 		update_mmu_cache(vma, address, ppte);
 	}
+	mutex_unlock(&vma->vm_mm->marked_ranges_mutex);
+	if (!*preallocated_range) {
+		*preallocated_range = tocttou_interval_alloc();
+	}
 	return true;
 }
 
 static bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
-		     unsigned long address, void *arg)
+		     unsigned long address, void *arg) 
 {
 	pte_t entry;
 	spinlock_t *ptl;
@@ -403,34 +419,39 @@ static bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
 	markings = get_page_markings(page);
 	// Find the PTE which maps the address
 	//
+	mutex_lock(&vma->vm_mm->marked_ranges_mutex);
 	while (page_vma_mapped_walk(&pvmw)) {
-		struct permission_refs_node *iter;
-		struct interval_tree_node * range;
+		struct interval_tree_node *range;
 		pte_t * ppte = pvmw.pte;
 
 		// R unmarking
-		entry = READ_ONCE(*ppte);
+		entry = *ppte;
 		unsigned rmarked = pte_rmarked(entry);
+
 		
-		if (!rmarked) {
-			continue;
+		if (pte_rmarked(*pvmw.pte)) {
+	
+			pte_t temp = pte_runmark(*pvmw.pte);
+			set_pte_at(vma->vm_mm, pvmw.address, pvmw.pte, temp);
+		
+			// Flush the TLB for every page
+			//
+			flush_tlb_page(vma, address);
+			update_mmu_cache(vma, address, ppte);
+		
+			// printk(KERN_ERR "Unmark %u: %lx - %lx\n", current->pid, pvmw.address, pvmw.address + PAGE_SIZE - 1);
+			
+			range = interval_tree_iter_first(&vma->vm_mm->marked_ranges_root, pvmw.address, pvmw.address + PAGE_SIZE - 1);
+			// printk(KERN_ERR "Range: %p\n", range);
+			if (!range) {
+				BUG();
+			}
+			interval_tree_remove(range, &vma->vm_mm->marked_ranges_root);
+			tocttou_interval_free(range);
 		}
 		
-		pte_t temp = pte_runmark(*pvmw.pte);
-		set_pte_at(vma->vm_mm, pvmw.address, pvmw.pte, temp);
-	
-		// Flush the TLB for every page
-		//
-		flush_tlb_page(vma, address);
-		update_mmu_cache(vma, address, ppte);
-		mutex_unlock(&vma->vm_mm->marked_ranges_mutex);
-
-		mutex_lock(&vma->vm_mm->marked_ranges_mutex);
-		range = interval_tree_iter_first(&vma->vm_mm->marked_ranges_root, address, address + PAGE_SIZE - 1);
-		BUG_ON(range == NULL && "range must be present");
-		interval_tree_remove(range, &vma->vm_mm->marked_ranges_root);
-		tocttou_interval_free(range);
 	}
+	mutex_unlock(&vma->vm_mm->marked_ranges_mutex);
 	return true;
 }
 
@@ -449,12 +470,10 @@ void lock_page_from_va(unsigned long vaddr)
 	struct tocttou_page_data *markings;
 	struct vm_area_struct *vma;
 	pte_t entry;
-	unsigned total;
 	unsigned retried = 0;
 
 	struct rmap_walk_control rwc = {
 		.rmap_one = page_mark_one,
-		.arg = (void *)&total,
 		.anon_lock = page_lock_anon_vma_read,
 	};
 
@@ -564,26 +583,44 @@ retry:
 		add_page_markings(target_page, markings);
 		markings->op_code = current->op_code;
 
-		// Iterate through other pages and mark them
-		total = 0;
 
 		struct vm_area_struct *target_vma = find_vma(current->mm, vaddr);
 
 		if (!is_cow_mapping(target_vma->vm_flags)) {
+			struct interval_tree_node *new_range = tocttou_interval_alloc();
 			pte_unmap(ptep);
+			rwc.arg = &new_range;
 			rmap_walk(target_page, &rwc);
+			tocttou_interval_free(new_range);
 		} else {
+			int rmarked;
+			struct interval_tree_node *new_range = tocttou_interval_alloc();
+			mutex_lock(&vma->vm_mm->marked_ranges_mutex);
 			spinlock_t *ptl = pte_lockptr(current->mm, pmd);
 			spin_lock(ptl);
-			entry = READ_ONCE(*ptep);
 
+			entry = *(volatile pte_t *)ptep;
+			rmarked = pte_rmarked(entry);
 			// If the pte hasn't been marked already
-			if (!(pte_smarked(entry) || pte_rmarked(entry)))
-				set_pte_at(current->mm, vaddr, ptep, (pte_wrprotect(entry)));
+			if (!rmarked) {
+				new_range->start = vaddr;
+				new_range->last = vaddr + PAGE_SIZE - 1;
+				// printk(KERN_ERR "Mark %u: %lx - %lx\n", current->pid, new_range->start, new_range->last);
+
+				
+				interval_tree_insert(new_range, &vma->vm_mm->marked_ranges_root);
+
+				set_pte_at(current->mm, vaddr, ptep, (pte_rmark(entry)));
+
+			}
 			spin_unlock(ptl);
+
 			flush_tlb_page(vma, vaddr);
 			update_mmu_cache(vma, vaddr, ptep);
+			mutex_unlock(&vma->vm_mm->marked_ranges_mutex);
 
+			if (rmarked)
+				tocttou_interval_free(new_range);
 			pte_unmap(ptep);
 		}
 	} else {
@@ -604,16 +641,19 @@ void lock_page_from_va(unsigned long addr) {}
 EXPORT_SYMBOL(lock_page_from_va);
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
-void tocttou_perform_deferred_writes()
+__attribute__((optimize("-Og"))) void tocttou_perform_deferred_writes()
 {
 	struct tocttou_deferred_write *iter, *temp;
 	struct list_head *list = &current->deferred_writes_list;
 
 	list_for_each_entry_safe(iter, temp, list, other_nodes) {
-		copy_to_user((void*)iter->address, iter->data, iter->length);
+		printk(KERN_ERR"Deferred write started: %u %ld %lx-%lx\n", current->pid, current->op_code, iter->address, iter->address + iter->length);
+		__raw_copy_to_user((void*)iter->address, iter->data, iter->length);
 		list_del(&iter->other_nodes);
 		kfree(iter->data);
+		printk(KERN_ERR"Deferred write finished: %u %ld %lx-%lx\n", current->pid, current->op_code, iter->address, iter->address + iter->length);
 		tocttou_deferred_write_free(iter);
+		
 	}
 }
 EXPORT_SYMBOL(tocttou_perform_deferred_writes);
