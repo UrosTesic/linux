@@ -27,7 +27,7 @@ raw_copy_to_user(void __user *to, const void *from, unsigned long n)
 	start = (unsigned long) to;
 	end = (unsigned long) to + n;
 
-	bytes_left = n;
+	bytes_left = 0;
 
 	if (false && current->mm && current->op_code != -1) {
 		mutex_lock(&current->mm->marked_ranges_mutex);
@@ -39,10 +39,9 @@ raw_copy_to_user(void __user *to, const void *from, unsigned long n)
 				unsigned long local_end = min(end, check->start);
 				unsigned long write_length = local_end - write_to;
 
-				write_length = __raw_copy_to_user((void *)write_to, (void *) read_from, write_length);
+				bytes_left += __raw_copy_to_user((void *)write_to, (void *) read_from, write_length);
 				write_to += write_length;
 				read_from += write_length;
-				bytes_left -= write_length;
 			}
 
 			{
@@ -63,7 +62,7 @@ raw_copy_to_user(void __user *to, const void *from, unsigned long n)
 
 				write_to += write_length;
 				read_from += write_length;
-				bytes_left -= write_length;
+				bytes_left += write_length;
 			}
 
 			check = interval_tree_iter_next(check, start, end-1);
@@ -74,14 +73,14 @@ raw_copy_to_user(void __user *to, const void *from, unsigned long n)
 	if (write_to < end) {
 		unsigned long write_length = end - write_to;
 
-		write_length = __raw_copy_to_user((void *) write_to, (void *) read_from, write_length);
+		bytes_left += __raw_copy_to_user((void *) write_to, (void *) read_from, write_length);
 		write_to += write_length;
 		read_from += write_length;
-		bytes_left -= write_length;
+
 	}
 
 	// uaccprintk(KERN_ERR"%u Copy_to_user End\n", current->pid);
-	return n - bytes_left;
+	return bytes_left;
 }
 EXPORT_SYMBOL(raw_copy_to_user);
 

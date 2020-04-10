@@ -277,7 +277,7 @@ static int copy_to_user_adapter(unsigned long x, size_t length, void* __user ptr
 	return copy_to_user(ptr, &x, length) == 0 ? 0 : -EFAULT;
 }
 
-#define put_user(x, ptr) copy_to_user_adapter((unsigned long) x, sizeof(*ptr), ptr)
+#define put_user(x, ptr) copy_to_user_adapter((unsigned long) x, sizeof(*(ptr)), ptr)
 
 #define __put_user_size(x, ptr, size, label)				\
 do {									\
@@ -575,7 +575,7 @@ inline static int __copy_to_user_adapter(unsigned long x, size_t length, void* _
 	return __copy_to_user(ptr, &x, length) == 0 ? 0 : -EFAULT;
 }
 
-#define __put_user(x, ptr) __copy_to_user_adapter((unsigned long) x, sizeof(*ptr), ptr)
+#define __put_user(x, ptr) __copy_to_user_adapter((unsigned long) x, sizeof(*(ptr)), ptr)
 /*
  * {get|put}_user_try and catch
  *
