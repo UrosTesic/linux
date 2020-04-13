@@ -464,6 +464,7 @@ struct vm_fault {
 					 * page table to avoid allocation from
 					 * atomic context.
 					 */
+	struct rb_root_cached prealloc_range;
 };
 
 /* page entry size for vm->huge_fault() */
@@ -1054,7 +1055,6 @@ static inline __must_check bool try_get_page(struct page *page)
 
 static inline void put_page(struct page *page)
 {	
-	BUG_ON(is_page_tocttou(page));
 	page = compound_head(page);
 
 	/*
@@ -1067,7 +1067,10 @@ static inline void put_page(struct page *page)
 		return;
 
 	if (put_page_testzero(page))
+	{
+		BUG_ON(is_page_tocttou(page));
 		__put_page(page);
+	}
 }
 
 /**

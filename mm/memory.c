@@ -79,6 +79,7 @@
 #include <asm/tlb.h>
 #include <asm/tlbflush.h>
 #include <asm/pgtable.h>
+#include <linux/interval_tree.h>
 
 #include "internal.h"
 
@@ -1019,7 +1020,6 @@ static unsigned long zap_pte_range(struct mmu_gather *tlb,
 	pte_t *start_pte;
 	pte_t *pte;
 	swp_entry_t entry;
-	struct tocttou_page_data *markings;
 
 	tlb_change_page_size(tlb, PAGE_SIZE);
 again:
@@ -3286,6 +3286,7 @@ vm_fault_t alloc_set_pte(struct vm_fault *vmf, struct mem_cgroup *memcg,
 	pte_t entry;
 	vm_fault_t ret;
 	struct tocttou_page_data *markings;
+	struct interval_tree_node *range;
 
 	if (pmd_none(*vmf->pmd) && PageTransCompound(page) &&
 			IS_ENABLED(CONFIG_TRANSPARENT_HUGE_PAGECACHE)) {
@@ -3297,10 +3298,12 @@ vm_fault_t alloc_set_pte(struct vm_fault *vmf, struct mem_cgroup *memcg,
 			return ret;
 	}
 
+	
+
 	if (!vmf->pte) {
 		ret = pte_alloc_one_map(vmf);
 		if (ret) {
-
+			
 			return ret;
 		}	
 	}
@@ -3334,8 +3337,14 @@ vm_fault_t alloc_set_pte(struct vm_fault *vmf, struct mem_cgroup *memcg,
 	 * it will try to aquire PTL. Considering that we hold the PTL
 	 * that thread will wait, until we are finished with our marking.
 	 */
-	if (is_page_tocttou(page))
+	if (is_page_tocttou(page)) {
 		entry = pte_rmark(entry);
+		range = interval_tree_iter_first(&vmf->prealloc_range, 0, 0);
+		interval_tree_remove(range, &vmf->prealloc_range);
+		range->start = vmf->address;
+		range->last = vmf->address + PAGE_SIZE - 1;
+		interval_tree_insert(range, &vmf->vma->vm_mm->marked_ranges_root);
+	}
 #endif
 
 	set_pte_at(vma->vm_mm, vmf->address, vmf->pte, entry);
@@ -3365,6 +3374,7 @@ vm_fault_t alloc_set_pte(struct vm_fault *vmf, struct mem_cgroup *memcg,
 vm_fault_t finish_fault(struct vm_fault *vmf)
 {
 	struct page *page;
+	struct interval_tree_node *range, *iter_range, *temp;
 	vm_fault_t ret = 0;
 
 	/* Did we COW the page? */
@@ -3374,6 +3384,11 @@ vm_fault_t finish_fault(struct vm_fault *vmf)
 	else
 		page = vmf->page;
 
+	range = tocttou_interval_alloc();
+	range->start = 0;
+	range->last = 0;
+	interval_tree_insert(range, &vmf->prealloc_range);
+	mutex_lock(&vmf->vma->vm_mm->marked_ranges_mutex);
 	/*
 	 * check even for read faults because we might have lost our CoWed
 	 * page
@@ -3384,6 +3399,12 @@ vm_fault_t finish_fault(struct vm_fault *vmf)
 		ret = alloc_set_pte(vmf, vmf->memcg, page);
 	if (vmf->pte)
 		pte_unmap_unlock(vmf->pte, vmf->ptl);
+
+	mutex_unlock(&vmf->vma->vm_mm->marked_ranges_mutex);
+	rbtree_postorder_for_each_entry_safe(iter_range, temp, &vmf->prealloc_range.rb_root, rb) {
+		interval_tree_remove(iter_range, &vmf->prealloc_range);
+		tocttou_interval_free(iter_range);
+	}
 	return ret;
 }
 
@@ -3895,8 +3916,6 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 	if (is_page_tocttou(accessed_page))
 		printk(KERN_ERR"TOCTTOU Page Faulted Access: %u %ld", current->pid, current->op_code);
 
-	if ((vmf->flags & FAULT_FLAG_PROTECTION) && !(vmf->flags & FAULT_FLAG_WRITE) && !rmarked)
-		return VM_FAULT_PROTECTION;
 
 	// We wait if the page is marked
 	if (is_page_tocttou(accessed_page) && rmarked && (vmf->flags & FAULT_FLAG_DO_TOCTTOU)) {

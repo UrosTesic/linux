@@ -29,7 +29,7 @@ raw_copy_to_user(void __user *to, const void *from, unsigned long n)
 
 	bytes_left = 0;
 
-	if (false && current->mm && current->op_code != -1) {
+	if (current->mm && current->op_code != -1) {
 		mutex_lock(&current->mm->marked_ranges_mutex);
 		check = interval_tree_iter_first(&current->mm->marked_ranges_root, start, end-1);
 
@@ -62,7 +62,7 @@ raw_copy_to_user(void __user *to, const void *from, unsigned long n)
 
 				write_to += write_length;
 				read_from += write_length;
-				bytes_left += write_length;
+				bytes_left += 0;
 			}
 
 			check = interval_tree_iter_next(check, start, end-1);
@@ -111,8 +111,6 @@ _mark_user_pages_read_only(const void __user *from, unsigned long n)
 {
 	unsigned long address;
 	struct vm_area_struct *vma;
-
-	return;
 	
 	if (!current->pid)
 		return;
@@ -407,6 +405,7 @@ static bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
 	pte_t entry;
 	spinlock_t *ptl;
 	struct tocttou_page_data *markings;
+
 	struct page_vma_mapped_walk pvmw = {
 		.page = page,
 		.vma = vma,
@@ -438,17 +437,17 @@ static bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
 			flush_tlb_page(vma, address);
 			update_mmu_cache(vma, address, ppte);
 		
-			// printk(KERN_ERR "Unmark %u: %lx - %lx\n", current->pid, pvmw.address, pvmw.address + PAGE_SIZE - 1);
+			//printk(KERN_ERR "Unmark %u: %lx - %lx\n", current->pid, pvmw.address, pvmw.address + PAGE_SIZE - 1);
 			
 			range = interval_tree_iter_first(&vma->vm_mm->marked_ranges_root, pvmw.address, pvmw.address + PAGE_SIZE - 1);
-			// printk(KERN_ERR "Range: %p\n", range);
+			//printk(KERN_ERR "Range: %p\n", range);
 			if (!range) {
 				BUG();
 			}
 			interval_tree_remove(range, &vma->vm_mm->marked_ranges_root);
 			tocttou_interval_free(range);
 		}
-		
+
 	}
 	mutex_unlock(&vma->vm_mm->marked_ranges_mutex);
 	return true;
@@ -640,17 +639,15 @@ void lock_page_from_va(unsigned long addr) {}
 EXPORT_SYMBOL(lock_page_from_va);
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
-__attribute__((optimize("-Og"))) void tocttou_perform_deferred_writes()
+void tocttou_perform_deferred_writes()
 {
 	struct tocttou_deferred_write *iter, *temp;
 	struct list_head *list = &current->deferred_writes_list;
 
 	list_for_each_entry_safe(iter, temp, list, other_nodes) {
-		printk(KERN_ERR"Deferred write started: %u %ld %lx-%lx\n", current->pid, current->op_code, iter->address, iter->address + iter->length);
 		__raw_copy_to_user((void*)iter->address, iter->data, iter->length);
 		list_del(&iter->other_nodes);
 		kfree(iter->data);
-		printk(KERN_ERR"Deferred write finished: %u %ld %lx-%lx\n", current->pid, current->op_code, iter->address, iter->address + iter->length);
 		tocttou_deferred_write_free(iter);
 		
 	}
