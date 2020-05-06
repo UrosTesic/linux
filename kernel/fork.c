@@ -428,6 +428,7 @@ static int memcg_charge_kernel_stack(struct task_struct *tsk)
 	return 0;
 }
 
+
 static void release_task_stack(struct task_struct *tsk)
 {
 	if (WARN_ON(tsk->state != TASK_DEAD))
@@ -606,6 +607,8 @@ static __latent_entropy int dup_mmap(struct mm_struct *mm,
 		if (retval)
 			goto out;
 	}
+
+	duplicate_marked_ranges(oldmm, mm);
 	/* a new mm has just been created */
 	retval = arch_dup_mmap(oldmm, mm);
 out:

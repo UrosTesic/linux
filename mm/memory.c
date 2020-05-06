@@ -1005,7 +1005,29 @@ int copy_page_range(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 
 	if (is_cow)
 		mmu_notifier_invalidate_range_end(&range);
+		
 	return ret;
+}
+
+void
+duplicate_marked_ranges(struct mm_struct *oldmm, struct mm_struct *mm)
+{
+	struct interval_tree_node *iter;
+
+	mutex_lock(&oldmm->marked_ranges_mutex);
+	for (iter = interval_tree_iter_first(&oldmm->marked_ranges_root, 0, -1);
+		 iter;
+		 iter = interval_tree_iter_next(iter, 0, -1)) {
+		struct vm_area_struct *iter_vma = find_vma(oldmm, iter->start);
+		BUG_ON(!iter_vma);
+		if (!is_cow_mapping(iter_vma->vm_flags)) {
+			struct interval_tree_node *new_range = tocttou_interval_alloc();
+			new_range->start = iter->start;
+			new_range->last = iter->last;
+			interval_tree_insert(new_range, &mm->marked_ranges_root);
+		}
+	}
+	mutex_unlock(&oldmm->marked_ranges_mutex);
 }
 
 static unsigned long zap_pte_range(struct mmu_gather *tlb,

@@ -53,6 +53,7 @@
 #include <asm/cacheflush.h>
 #include <asm/tlb.h>
 #include <asm/mmu_context.h>
+#include <linux/interval_tree.h>
 
 #include "internal.h"
 
@@ -2749,6 +2750,19 @@ int split_vma(struct mm_struct *mm, struct vm_area_struct *vma,
 	return __split_vma(mm, vma, addr, new_below);
 }
 
+static int remove_marked_ranges(struct mm_struct *mm, 
+								unsigned long start, unsigned long end)
+{
+	struct interval_tree_node *iter_range, *temp; 
+	mutex_lock(&mm->marked_ranges_mutex);
+	rbtree_postorder_for_each_entry_safe(iter_range, temp,
+										&mm->marked_ranges_root.rb_root, rb) {
+		interval_tree_remove(iter_range, &mm->marked_ranges_root);
+		tocttou_interval_free(iter_range);
+	}
+	mutex_unlock(&mm->marked_ranges_mutex);
+}
+
 /* Munmap is split into 2 main parts -- this part which finds
  * what needs doing, and the areas themselves, which do the
  * work.  This now handles partial unmappings.
@@ -2861,7 +2875,7 @@ int __do_munmap(struct mm_struct *mm, unsigned long start, size_t len,
 
 	/* Fix up all other VM information */
 	remove_vma_list(mm, vma);
-
+	remove_marked_ranges(mm, start, end);
 	return downgrade ? 1 : 0;
 }
 
