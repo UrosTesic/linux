@@ -2750,18 +2750,19 @@ int split_vma(struct mm_struct *mm, struct vm_area_struct *vma,
 	return __split_vma(mm, vma, addr, new_below);
 }
 
-static int remove_marked_ranges(struct mm_struct *mm, 
+/*static int remove_marked_ranges(struct mm_struct *mm, 
 								unsigned long start, unsigned long end)
 {
 	struct interval_tree_node *iter_range, *temp; 
 	mutex_lock(&mm->marked_ranges_mutex);
 	rbtree_postorder_for_each_entry_safe(iter_range, temp,
 										&mm->marked_ranges_root.rb_root, rb) {
+		printk(KERN_ERR "Remove %u %lx - %lx\n", current->pid, iter_range->start, iter_range->last);
 		interval_tree_remove(iter_range, &mm->marked_ranges_root);
 		tocttou_interval_free(iter_range);
 	}
 	mutex_unlock(&mm->marked_ranges_mutex);
-}
+}*/
 
 /* Munmap is split into 2 main parts -- this part which finds
  * what needs doing, and the areas themselves, which do the
@@ -2773,7 +2774,6 @@ int __do_munmap(struct mm_struct *mm, unsigned long start, size_t len,
 {
 	unsigned long end;
 	struct vm_area_struct *vma, *prev, *last;
-
 
 	if ((offset_in_page(start)) || start > TASK_SIZE || len > TASK_SIZE-start)
 		return -EINVAL;
@@ -2864,7 +2864,7 @@ int __do_munmap(struct mm_struct *mm, unsigned long start, size_t len,
 		}
 	}
     
-	// unmark_pages_to_be_unmapped(mm, start, end);
+
 	/* Detach vmas from rbtree */
 	detach_vmas_to_be_unmapped(mm, vma, prev, end);
 
@@ -2875,7 +2875,6 @@ int __do_munmap(struct mm_struct *mm, unsigned long start, size_t len,
 
 	/* Fix up all other VM information */
 	remove_vma_list(mm, vma);
-	remove_marked_ranges(mm, start, end);
 	return downgrade ? 1 : 0;
 }
 

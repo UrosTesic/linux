@@ -121,7 +121,9 @@ static unsigned long change_pte_range(struct vm_area_struct *vma, pmd_t *pmd,
 				ptent = pte_mkwrite(ptent);
 			}
 
+#ifdef CONFIG_TOCTTOU_PROTECTION
 			ptent = pte_preserve_tocttou(oldpte, ptent);
+#endif
 			
 			ptep_modify_prot_commit(vma, addr, pte, oldpte, ptent);
 			pages++;

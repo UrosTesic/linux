@@ -10,7 +10,8 @@
 #include "../../mm/internal.h"
 #include <uapi/asm/unistd_64.h>
 
-__attribute__((optimize("-Og"))) unsigned long __must_check
+#ifdef CONFIG_TOCTTOU_PROTECTION
+unsigned long __must_check
 raw_copy_to_user(void __user *to, const void *from, unsigned long n)
 {
 	unsigned long bytes_left;
@@ -79,10 +80,11 @@ raw_copy_to_user(void __user *to, const void *from, unsigned long n)
 
 	}
 
-	// uaccprintk(KERN_ERR"%u Copy_to_user End\n", current->pid);
+	// printk(KERN_ERR"%u Copy_to_user End\n", current->pid);
 	return bytes_left;
 }
 EXPORT_SYMBOL(raw_copy_to_user);
+#endif
 
 #if defined (CONFIG_TOCTTOU_PROTECTION) && !defined(INLINE_COPY_FROM_USER)
 __must_check unsigned long
@@ -129,6 +131,8 @@ _mark_user_pages_read_only(const void __user *from, unsigned long n)
 		case __NR_pwritev2:
 		case __NR_finit_module:
 		case __NR_exit:
+		case __NR_pselect6:
+		case __NR_ppoll:
 		case -1:
 			return;
 	}
@@ -371,7 +375,7 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
 		.address = address,
 	};
 
-	if (is_cow_mapping(vma->vm_flags)) return true;
+	//if (is_cow_mapping(vma->vm_flags)) return true;
 	// Find the PTE which maps the address
 	//
 	mutex_lock(&vma->vm_mm->marked_ranges_mutex);
@@ -380,7 +384,7 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
 		*preallocated_range = NULL;
 		new_range->start = address;
 		new_range->last = address + PAGE_SIZE - 1;
-		// printk(KERN_ERR "Mark %u: %lx - %lx\n", current->pid, new_range->start, new_range->last);
+		//printk(KERN_ERR "Mark %u: %lx - %lx\n", current->pid, new_range->start, new_range->last);
 
 		
 		interval_tree_insert(new_range, &vma->vm_mm->marked_ranges_root);
@@ -442,8 +446,12 @@ static bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
 			range = interval_tree_iter_first(&vma->vm_mm->marked_ranges_root, pvmw.address, pvmw.address + PAGE_SIZE - 1);
 			//printk(KERN_ERR "Range: %p\n", range);
 			if (!range) {
+				//printk(KERN_ERR "VMA Flags: %lx\n", vma->vm_flags);
+				//printk(KERN_ERR "Syscall: %lx\n", current->op_code);
+				//printk(KERN_ERR "Address: %lx\n", pvmw.address);
 				BUG();
 			}
+			//printk(KERN_ERR "Remove %u: %lx - %lx\n", current->pid, range->start, range->last);
 			interval_tree_remove(range, &vma->vm_mm->marked_ranges_root);
 			tocttou_interval_free(range);
 		}
@@ -568,7 +576,7 @@ retry:
 
 	new_node->marked_page = target_page;
 
-
+	//printk(KERN_ERR "Lock %u: %lx - %lx\n", current->pid, new_range->start, new_range->last);
 	lock_tocttou_mutex(target_page);
 	
 	// Allocate and initialize the mark data
@@ -603,7 +611,7 @@ retry:
 			if (!rmarked) {
 				new_range->start = vaddr;
 				new_range->last = vaddr + PAGE_SIZE - 1;
-				// printk(KERN_ERR "Mark %u: %lx - %lx\n", current->pid, new_range->start, new_range->last);
+				//printk(KERN_ERR "Mark COW %u: %lx - %lx\n", current->pid, new_range->start, new_range->last);
 
 				
 				interval_tree_insert(new_range, &vma->vm_mm->marked_ranges_root);
@@ -677,6 +685,7 @@ void unlock_pages_from_page_frame(struct page* target_page)
 		struct permission_refs_node *iter;
 		struct permission_refs_node *temp;
 		barrier();
+		//printk("Unmarking: %p\n", target_page);
 		rmap_walk(target_page, &rwc);
 		remove_page_markings(target_page);
 

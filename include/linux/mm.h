@@ -464,7 +464,9 @@ struct vm_fault {
 					 * page table to avoid allocation from
 					 * atomic context.
 					 */
+#ifdef CONFIG_TOCTTOU_PROTECTION
 	struct rb_root_cached prealloc_range;
+#endif
 };
 
 /* page entry size for vm->huge_fault() */
@@ -1067,8 +1069,10 @@ static inline void put_page(struct page *page)
 		return;
 
 	if (put_page_testzero(page))
-	{
+	{	
+#ifdef CONFIG_TOCTTOU_PROTECTION
 		BUG_ON(is_page_tocttou(page));
+#endif
 		__put_page(page);
 	}
 }

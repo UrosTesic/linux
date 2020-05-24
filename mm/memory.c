@@ -755,7 +755,7 @@ copy_one_pte(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 	 * If it's a COW mapping, write protect it both
 	 * in the parent and the child
 	 */
-
+#ifdef CONFIG_TOCTTOU_PROTECTION
 	if (is_cow_mapping(vm_flags) && (pte_write(pte) || pte_rmarked_write(pte))) {
 			if (!pte_rmarked_write(pte)) {
 				ptep_set_wrprotect(src_mm, addr, src_pte);
@@ -765,7 +765,12 @@ copy_one_pte(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 			}
 			pte = pte_wrprotect(pte);
 	}
-
+#else
+	if (is_cow_mapping(vm_flags) && pte_write(pte)) {
+		ptep_set_wrprotect(src_mm, addr, src_pte);
+		pte = pte_wrprotect(pte);
+	}
+#endif
 	/*
 	 * If it's a shared mapping, mark it clean in
 	 * the child
@@ -1009,6 +1014,7 @@ int copy_page_range(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 	return ret;
 }
 
+#ifdef CONFIG_TOCTTOU_PROTECTION
 void
 duplicate_marked_ranges(struct mm_struct *oldmm, struct mm_struct *mm)
 {
@@ -1029,6 +1035,10 @@ duplicate_marked_ranges(struct mm_struct *oldmm, struct mm_struct *mm)
 	}
 	mutex_unlock(&oldmm->marked_ranges_mutex);
 }
+#else
+void
+duplicate_marked_ranges(struct mm_struct *oldmm, struct mm_struct *mm) {}
+#endif
 
 static unsigned long zap_pte_range(struct mmu_gather *tlb,
 				struct vm_area_struct *vma, pmd_t *pmd,
@@ -1060,6 +1070,9 @@ again:
 
 		if (pte_present(ptent)) {
 			struct page *page;
+#ifdef CONFIG_TOCTTOU_PROTECTION
+			int rmarked_page = pte_rmarked(ptent);
+#endif
 
 			page = vm_normal_page(vma, addr, ptent);
 			if (unlikely(details) && page) {
@@ -1077,6 +1090,14 @@ again:
 			ptent = ptep_get_and_clear_full(mm, addr, pte,
 							tlb->fullmm);
 			tlb_remove_tlb_entry(tlb, pte, addr);
+#ifdef CONFIG_TOCTTOU_PROTECTION
+			if (rmarked_page) {
+				struct interval_tree_node *node;
+				node = interval_tree_iter_first(&mm->marked_ranges_root, addr, addr + PAGE_SIZE - 1);
+				interval_tree_remove(node, &mm->marked_ranges_root);
+				tocttou_interval_free(node);
+			}
+#endif
 			if (unlikely(!page))
 				continue;
 
@@ -1259,6 +1280,9 @@ void unmap_page_range(struct mmu_gather *tlb,
 	unsigned long next;
 
 	BUG_ON(addr >= end);
+#ifdef CONFIG_TOCTTOU_PROTECTION
+	mutex_lock(&vma->vm_mm->marked_ranges_mutex);
+#endif
 	tlb_start_vma(tlb, vma);
 	pgd = pgd_offset(vma->vm_mm, addr);
 	do {
@@ -1268,6 +1292,9 @@ void unmap_page_range(struct mmu_gather *tlb,
 		next = zap_p4d_range(tlb, vma, pgd, addr, next, details);
 	} while (pgd++, addr = next, addr != end);
 	tlb_end_vma(tlb, vma);
+#ifdef CONFIG_TOCTTOU_PROTECTION
+	mutex_unlock(&vma->vm_mm->marked_ranges_mutex);
+#endif
 }
 
 
@@ -3406,11 +3433,13 @@ vm_fault_t finish_fault(struct vm_fault *vmf)
 	else
 		page = vmf->page;
 
+#ifdef CONFIG_TOCTTOU_PROTECTION
 	range = tocttou_interval_alloc();
 	range->start = 0;
 	range->last = 0;
 	interval_tree_insert(range, &vmf->prealloc_range);
 	mutex_lock(&vmf->vma->vm_mm->marked_ranges_mutex);
+#endif
 	/*
 	 * check even for read faults because we might have lost our CoWed
 	 * page
@@ -3422,11 +3451,13 @@ vm_fault_t finish_fault(struct vm_fault *vmf)
 	if (vmf->pte)
 		pte_unmap_unlock(vmf->pte, vmf->ptl);
 
+#ifdef CONFIG_TOCTTOU_PROTECTION
 	mutex_unlock(&vmf->vma->vm_mm->marked_ranges_mutex);
 	rbtree_postorder_for_each_entry_safe(iter_range, temp, &vmf->prealloc_range.rb_root, rb) {
 		interval_tree_remove(iter_range, &vmf->prealloc_range);
 		tocttou_interval_free(iter_range);
 	}
+#endif
 	return ret;
 }
 
@@ -3935,8 +3966,8 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 	unsigned rmarked = pte_rmarked(vmf->orig_pte);
 	unsigned write = pte_write(vmf->orig_pte);
 
-	if (is_page_tocttou(accessed_page))
-		printk(KERN_ERR"TOCTTOU Page Faulted Access: %u %ld", current->pid, current->op_code);
+	//if (is_page_tocttou(accessed_page))
+		//printk(KERN_ERR"TOCTTOU Page Faulted Access: %u %ld", current->pid, current->op_code);
 
 
 	// We wait if the page is marked
@@ -3956,9 +3987,9 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 			
 			unlock_tocttou_mutex(accessed_page);
 			up_read(&current->mm->mmap_sem);
-			printk(KERN_ERR "Wait: PID: %lx Page: %lx Flags: %x Anonymous: %x Rmarked: %x PTE write: %x No threads: %x Op code: %ld\n", (unsigned long) task_pid_nr(current), (unsigned long) accessed_page, vmf->flags, vma_is_anonymous(vmf->vma), (unsigned) rmarked, write, get_nr_threads(current), markings->op_code);
+			//printk(KERN_ERR "Wait: PID: %lx Page: %lx Flags: %x Anonymous: %x Rmarked: %x PTE write: %x No threads: %x Op code: %ld\n", (unsigned long) task_pid_nr(current), (unsigned long) accessed_page, vmf->flags, vma_is_anonymous(vmf->vma), (unsigned) rmarked, write, get_nr_threads(current), markings->op_code);
 			wait_for_completion(&markings->unmarking_completed);
-			printk(KERN_ERR "Continue: %lx %lx\n", (unsigned long) task_pid_nr(current), (unsigned long) accessed_page);
+			//printk(KERN_ERR "Continue: %lx %lx\n", (unsigned long) task_pid_nr(current), (unsigned long) accessed_page);
 			down_read(&current->mm->mmap_sem);
 			lock_tocttou_mutex(accessed_page);
 

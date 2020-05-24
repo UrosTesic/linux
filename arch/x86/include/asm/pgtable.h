@@ -184,6 +184,7 @@ static inline int pte_write(pte_t pte)
 	return pte_flags(pte) & _PAGE_RW;
 }
 
+#ifdef CONFIG_TOCTTOU_PROTECTION
 static inline int pte_rmarked(pte_t pte)
 {
 	return pte_flags(pte) & _PAGE_TOCTTOU_MARKED;
@@ -193,6 +194,7 @@ static inline int pte_savedwrite(pte_t pte)
 {
 	return pte_flags(pte) & _PAGE_TOCTTOU_OLD;
 }
+#endif
 
 static inline int pte_user(pte_t pte)
 {
@@ -400,7 +402,7 @@ static inline pte_t pte_mkdevmap(pte_t pte)
 	return pte_set_flags(pte, _PAGE_SPECIAL|_PAGE_DEVMAP);
 }
 
-
+#ifdef CONFIG_TOCTTOU_PROTECTION
 static inline pte_t pte_rmark(pte_t pte)
 {
 	pte_t temp = pte_set_flags(pte, _PAGE_TOCTTOU_MARKED);
@@ -442,7 +444,7 @@ static inline pte_t pte_preserve_tocttou(pte_t oldpte, pte_t ptent)
 
 	return ptent;
 }
-
+#endif
 static inline pmd_t pmd_set_flags(pmd_t pmd, pmdval_t set)
 {
 	pmdval_t v = native_pmd_val(pmd);
@@ -1217,11 +1219,13 @@ static inline void ptep_set_wrprotect(struct mm_struct *mm,
 	clear_bit(_PAGE_BIT_RW, (unsigned long *)&ptep->pte);
 }
 
+#ifdef CONFIG_TOCTTOU_PROTECTION
 static inline void ptep_set_rmarked_wrprotect(struct mm_struct *mm,
 				      unsigned long addr, pte_t *ptep)
 {
 	clear_bit(_PAGE_BIT_TOCTTOU_OLD, (unsigned long *)&ptep->pte);
 }
+#endif
 
 #define flush_tlb_fix_spurious_fault(vma, address) do { } while (0)
 
