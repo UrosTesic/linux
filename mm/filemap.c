@@ -2634,15 +2634,13 @@ void filemap_map_pages(struct vm_fault *vmf,
 	struct interval_tree_node *iter_range;
 	struct interval_tree_node *temp;
 
-	vmf->prealloc_range = RB_ROOT_CACHED;
-
 	for (ctr = start_pgoff; ctr <= end_pgoff; ctr++) {
 		struct interval_tree_node *new_node = tocttou_interval_alloc();
-		new_node->start = 0;
-		new_node->last = 0;
+		new_node->start = 0xa0a0a0a0a0a0a0a0;
+		new_node->last = 0xf0f0f0f0f0f0f0f0;
 		interval_tree_insert(new_node, &vmf->prealloc_range);
 	}
-	mutex_lock(&vmf->vma->vm_mm->marked_ranges_mutex);
+	down_write(&vmf->vma->vm_mm->marked_ranges_sem);
 #endif
 	rcu_read_lock();
 	xas_for_each(&xas, page, end_pgoff) {
@@ -2701,12 +2699,13 @@ next:
 	}
 	rcu_read_unlock();
 #ifdef CONFIG_TOCTTOU_PROTECTION
-	mutex_unlock(&vmf->vma->vm_mm->marked_ranges_mutex);
+	up_write(&vmf->vma->vm_mm->marked_ranges_sem);
+
 
 	rbtree_postorder_for_each_entry_safe(iter_range, temp, &vmf->prealloc_range.rb_root, rb) {
-		interval_tree_remove(iter_range, &vmf->prealloc_range);
 		tocttou_interval_free(iter_range);
 	}
+	vmf->prealloc_range = RB_ROOT_CACHED;
 #endif
 }
 EXPORT_SYMBOL(filemap_map_pages);

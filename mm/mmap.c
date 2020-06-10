@@ -2750,19 +2750,6 @@ int split_vma(struct mm_struct *mm, struct vm_area_struct *vma,
 	return __split_vma(mm, vma, addr, new_below);
 }
 
-/*static int remove_marked_ranges(struct mm_struct *mm, 
-								unsigned long start, unsigned long end)
-{
-	struct interval_tree_node *iter_range, *temp; 
-	mutex_lock(&mm->marked_ranges_mutex);
-	rbtree_postorder_for_each_entry_safe(iter_range, temp,
-										&mm->marked_ranges_root.rb_root, rb) {
-		printk(KERN_ERR "Remove %u %lx - %lx\n", current->pid, iter_range->start, iter_range->last);
-		interval_tree_remove(iter_range, &mm->marked_ranges_root);
-		tocttou_interval_free(iter_range);
-	}
-	mutex_unlock(&mm->marked_ranges_mutex);
-}*/
 
 /* Munmap is split into 2 main parts -- this part which finds
  * what needs doing, and the areas themselves, which do the
@@ -3200,6 +3187,10 @@ void exit_mmap(struct mm_struct *mm)
 		vma = remove_vma(vma);
 	}
 	vm_unacct_memory(nr_accounted);
+	#ifdef CONFIG_TOCTTOU_PROTECTION
+		//printk(KERN_ERR"Enter ranges check\n");
+		BUG_ON(interval_tree_iter_first(&mm->marked_ranges_root, 0, -1));
+	#endif
 }
 
 /* Insert vm structure into process list sorted by address

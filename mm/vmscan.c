@@ -1585,12 +1585,6 @@ int __isolate_lru_page(struct page *page, isolate_mode_t mode)
 	if (PageUnevictable(page) && !(mode & ISOLATE_UNEVICTABLE))
 		return ret;
 
-#ifdef CONFIG_TOCTTOU_PROTECTION
-	/* Do not touch pinned pages */
-	if (is_page_tocttou(page))
-		return ret;
-#endif
-
 	ret = -EBUSY;
 
 	/*
@@ -1715,7 +1709,11 @@ static unsigned long isolate_lru_pages(unsigned long nr_to_scan,
 		nr_pages = compound_nr(page);
 		total_scan += nr_pages;
 
+#ifdef CONFIG_TOCTTOU_PROTECTION
+		if (page_zonenum(page) > sc->reclaim_idx || is_page_tocttou(page)) {
+#else
 		if (page_zonenum(page) > sc->reclaim_idx) {
+#endif
 			list_move(&page->lru, &pages_skipped);
 			nr_skipped[page_zonenum(page)] += nr_pages;
 			continue;

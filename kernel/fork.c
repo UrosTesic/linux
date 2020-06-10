@@ -98,6 +98,7 @@
 #include <asm/pgtable.h>
 #include <asm/pgalloc.h>
 #include <linux/uaccess.h>
+#include <linux/interval_tree.h>
 #include <asm/mmu_context.h>
 #include <asm/cacheflush.h>
 #include <asm/tlbflush.h>
@@ -1032,7 +1033,7 @@ static struct mm_struct *mm_init(struct mm_struct *mm, struct task_struct *p,
 #endif
 #ifdef CONFIG_TOCTTOU_PROTECTION
 	mm->marked_ranges_root = RB_ROOT_CACHED;
-	mutex_init(&mm->marked_ranges_mutex);
+	init_rwsem(&mm->marked_ranges_sem);
 #endif
 	mm_init_uprobes_state(mm);
 
@@ -1293,7 +1294,6 @@ static int wait_for_vfork_done(struct task_struct *child,
 void mm_release(struct task_struct *tsk, struct mm_struct *mm)
 {
 	unlock_marked_pages();
-
 	/* Get rid of any futexes when releasing the mm */
 #ifdef CONFIG_FUTEX
 	if (unlikely(tsk->robust_list)) {

@@ -31,7 +31,7 @@ raw_copy_to_user(void __user *to, const void *from, unsigned long n)
 	bytes_left = 0;
 
 	if (current->mm && current->op_code != -1) {
-		mutex_lock(&current->mm->marked_ranges_mutex);
+		down_read(&current->mm->marked_ranges_sem);
 		check = interval_tree_iter_first(&current->mm->marked_ranges_root, start, end-1);
 
 		while (check) {
@@ -68,7 +68,7 @@ raw_copy_to_user(void __user *to, const void *from, unsigned long n)
 
 			check = interval_tree_iter_next(check, start, end-1);
 		}
-		mutex_unlock(&current->mm->marked_ranges_mutex);
+		
 	}
 
 	if (write_to < end) {
@@ -80,6 +80,9 @@ raw_copy_to_user(void __user *to, const void *from, unsigned long n)
 
 	}
 
+	if (current->mm && current->op_code != -1) {
+		up_read(&current->mm->marked_ranges_sem);
+	}
 	// printk(KERN_ERR"%u Copy_to_user End\n", current->pid);
 	return bytes_left;
 }
@@ -121,18 +124,19 @@ _mark_user_pages_read_only(const void __user *from, unsigned long n)
 		return;
 	}
 	switch (current->op_code) {
-		case __NR_write:
+		//case __NR_write:
 		case __NR_futex:
 		case __NR_poll:
 		case __NR_select:
 		case __NR_execve:
-		case __NR_writev:
-		case __NR_pwrite64:
-		case __NR_pwritev2:
+		//case __NR_writev:
+		//case __NR_pwrite64:
+		//case __NR_pwritev2:
 		case __NR_finit_module:
 		case __NR_exit:
 		case __NR_pselect6:
 		case __NR_ppoll:
+		case __NR_rt_sigtimedwait:
 		case -1:
 			return;
 	}
@@ -211,11 +215,14 @@ EXPORT_SYMBOL(unlock_tocttou_mutex);
 
 struct interval_tree_node * tocttou_interval_alloc()
 {
-	return (struct interval_tree_node *) kmem_cache_alloc(tocttou_interval_cache, GFP_KERNEL);
+	struct interval_tree_node * temp = (struct interval_tree_node *) kmem_cache_alloc(tocttou_interval_cache, GFP_KERNEL);
+	//printk("Allocating: %p\n", temp);
+	return temp;
 }
 
 void tocttou_interval_free(struct interval_tree_node *node)
 {
+	//printk(KERN_ERR "Freeing: %p %lx %lx\n", node, node->start, node->last);
 	kmem_cache_free(tocttou_interval_cache, node);
 }
 struct tocttou_deferred_write *tocttou_deferred_write_alloc()
@@ -330,7 +337,7 @@ struct tocttou_page_data* remove_page_markings(struct page* page)
 	unsigned long idx = page_to_pfn(page) & TOCTTOU_MUTEX_MASK;
 	
 	clear_page_tocttou(page);
-	list_for_each_entry_safe(ptr, temp, &tocttou_global_structs[idx], other_nodes) {
+	list_for_each_entry(ptr, &tocttou_global_structs[idx], other_nodes) {
 		if (ptr->pfn == pfn){
 			list_del(&ptr->other_nodes);
 			return ptr;
@@ -378,7 +385,7 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
 	//if (is_cow_mapping(vma->vm_flags)) return true;
 	// Find the PTE which maps the address
 	//
-	mutex_lock(&vma->vm_mm->marked_ranges_mutex);
+	down_write(&vma->vm_mm->marked_ranges_sem);
 	while (page_vma_mapped_walk(&pvmw)) {
 		struct interval_tree_node *new_range = *preallocated_range;
 		*preallocated_range = NULL;
@@ -396,7 +403,7 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
 		flush_tlb_page(vma, address);
 		update_mmu_cache(vma, address, ppte);
 	}
-	mutex_unlock(&vma->vm_mm->marked_ranges_mutex);
+	up_write(&vma->vm_mm->marked_ranges_sem);
 	if (!*preallocated_range) {
 		*preallocated_range = tocttou_interval_alloc();
 	}
@@ -421,7 +428,7 @@ static bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
 	markings = get_page_markings(page);
 	// Find the PTE which maps the address
 	//
-	mutex_lock(&vma->vm_mm->marked_ranges_mutex);
+	down_write(&vma->vm_mm->marked_ranges_sem);
 	while (page_vma_mapped_walk(&pvmw)) {
 		struct interval_tree_node *range;
 		pte_t * ppte = pvmw.pte;
@@ -430,8 +437,8 @@ static bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
 		entry = *ppte;
 		unsigned rmarked = pte_rmarked(entry);
 
-		
-		if (pte_rmarked(*pvmw.pte)) {
+		BUG_ON(!rmarked && interval_tree_iter_first(&vma->vm_mm->marked_ranges_root, pvmw.address, pvmw.address + PAGE_SIZE - 1));
+		if (rmarked) {
 	
 			pte_t temp = pte_runmark(*pvmw.pte);
 			set_pte_at(vma->vm_mm, pvmw.address, pvmw.pte, temp);
@@ -457,7 +464,7 @@ static bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
 		}
 
 	}
-	mutex_unlock(&vma->vm_mm->marked_ranges_mutex);
+	up_write(&vma->vm_mm->marked_ranges_sem);
 	return true;
 }
 
@@ -601,7 +608,7 @@ retry:
 		} else {
 			int rmarked;
 			struct interval_tree_node *new_range = tocttou_interval_alloc();
-			mutex_lock(&vma->vm_mm->marked_ranges_mutex);
+			down_write(&vma->vm_mm->marked_ranges_sem);
 			spinlock_t *ptl = pte_lockptr(current->mm, pmd);
 			spin_lock(ptl);
 
@@ -623,7 +630,7 @@ retry:
 
 			flush_tlb_page(vma, vaddr);
 			update_mmu_cache(vma, vaddr, ptep);
-			mutex_unlock(&vma->vm_mm->marked_ranges_mutex);
+			up_write(&vma->vm_mm->marked_ranges_sem);
 
 			if (rmarked)
 				tocttou_interval_free(new_range);
@@ -690,6 +697,9 @@ void unlock_pages_from_page_frame(struct page* target_page)
 		remove_page_markings(target_page);
 
 		complete_all(&markings->unmarking_completed);
+		if (!markings->guests) {
+			tocttou_page_data_free(markings);
+		}
 	}
 	unlock_tocttou_mutex(target_page);
 }

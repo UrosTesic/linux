@@ -1020,20 +1020,21 @@ duplicate_marked_ranges(struct mm_struct *oldmm, struct mm_struct *mm)
 {
 	struct interval_tree_node *iter;
 
-	mutex_lock(&oldmm->marked_ranges_mutex);
+	down_read(&oldmm->marked_ranges_sem);
 	for (iter = interval_tree_iter_first(&oldmm->marked_ranges_root, 0, -1);
 		 iter;
 		 iter = interval_tree_iter_next(iter, 0, -1)) {
 		struct vm_area_struct *iter_vma = find_vma(oldmm, iter->start);
 		BUG_ON(!iter_vma);
-		if (!is_cow_mapping(iter_vma->vm_flags)) {
+		if ((!(iter_vma->vm_flags & VM_WIPEONFORK)) && !is_cow_mapping(iter_vma->vm_flags) && (!(iter_vma->vm_flags & (VM_HUGETLB | VM_PFNMAP | VM_MIXEDMAP)) && !iter_vma->anon_vma)) {
 			struct interval_tree_node *new_range = tocttou_interval_alloc();
 			new_range->start = iter->start;
 			new_range->last = iter->last;
+			//printk(KERN_ERR"Dup %p %lx %lx\n", new_range, new_range->start, new_range->last);
 			interval_tree_insert(new_range, &mm->marked_ranges_root);
 		}
 	}
-	mutex_unlock(&oldmm->marked_ranges_mutex);
+	up_read(&oldmm->marked_ranges_sem);
 }
 #else
 void
@@ -1091,10 +1092,13 @@ again:
 							tlb->fullmm);
 			tlb_remove_tlb_entry(tlb, pte, addr);
 #ifdef CONFIG_TOCTTOU_PROTECTION
+			
 			if (rmarked_page) {
 				struct interval_tree_node *node;
 				node = interval_tree_iter_first(&mm->marked_ranges_root, addr, addr + PAGE_SIZE - 1);
+				BUG_ON(!node);
 				interval_tree_remove(node, &mm->marked_ranges_root);
+				//printk(KERN_ERR"Zap %p %lx %lx\n", node, node->start, node->last);
 				tocttou_interval_free(node);
 			}
 #endif
@@ -1281,7 +1285,7 @@ void unmap_page_range(struct mmu_gather *tlb,
 
 	BUG_ON(addr >= end);
 #ifdef CONFIG_TOCTTOU_PROTECTION
-	mutex_lock(&vma->vm_mm->marked_ranges_mutex);
+	down_write(&vma->vm_mm->marked_ranges_sem);
 #endif
 	tlb_start_vma(tlb, vma);
 	pgd = pgd_offset(vma->vm_mm, addr);
@@ -1293,7 +1297,10 @@ void unmap_page_range(struct mmu_gather *tlb,
 	} while (pgd++, addr = next, addr != end);
 	tlb_end_vma(tlb, vma);
 #ifdef CONFIG_TOCTTOU_PROTECTION
-	mutex_unlock(&vma->vm_mm->marked_ranges_mutex);
+	//struct interval_tree_node *check = interval_tree_iter_first(&vma->vm_mm->marked_ranges_root, vma->vm_start, vma->vm_end-1);
+	//BUG_ON(check);
+	
+	up_write(&vma->vm_mm->marked_ranges_sem);
 #endif
 }
 
@@ -3388,11 +3395,14 @@ vm_fault_t alloc_set_pte(struct vm_fault *vmf, struct mem_cgroup *memcg,
 	 */
 	if (is_page_tocttou(page)) {
 		entry = pte_rmark(entry);
-		range = interval_tree_iter_first(&vmf->prealloc_range, 0, 0);
-		interval_tree_remove(range, &vmf->prealloc_range);
-		range->start = vmf->address;
-		range->last = vmf->address + PAGE_SIZE - 1;
-		interval_tree_insert(range, &vmf->vma->vm_mm->marked_ranges_root);
+		if (!interval_tree_iter_first(&vmf->vma->vm_mm->marked_ranges_root, vmf->address, vmf->address + PAGE_SIZE - 1)) {
+			range = interval_tree_iter_first(&vmf->prealloc_range, 0, -1);
+			interval_tree_remove(range, &vmf->prealloc_range);
+			range->start = vmf->address;
+			range->last = vmf->address + PAGE_SIZE - 1;
+			//printk(KERN_ERR"alloc_set_pte %p %lx %lx\n", range, range->start, range->last);
+			interval_tree_insert(range, &vmf->vma->vm_mm->marked_ranges_root);
+		}
 	}
 #endif
 
@@ -3435,10 +3445,10 @@ vm_fault_t finish_fault(struct vm_fault *vmf)
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
 	range = tocttou_interval_alloc();
-	range->start = 0;
-	range->last = 0;
+	//range->start = 0xb0b0b0b0b0b0b0b0;
+	//range->last =  0xe0e0e0e0e0e0e0e0;
 	interval_tree_insert(range, &vmf->prealloc_range);
-	mutex_lock(&vmf->vma->vm_mm->marked_ranges_mutex);
+	down_write(&vmf->vma->vm_mm->marked_ranges_sem);
 #endif
 	/*
 	 * check even for read faults because we might have lost our CoWed
@@ -3452,11 +3462,11 @@ vm_fault_t finish_fault(struct vm_fault *vmf)
 		pte_unmap_unlock(vmf->pte, vmf->ptl);
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
-	mutex_unlock(&vmf->vma->vm_mm->marked_ranges_mutex);
+	up_write(&vmf->vma->vm_mm->marked_ranges_sem);
 	rbtree_postorder_for_each_entry_safe(iter_range, temp, &vmf->prealloc_range.rb_root, rb) {
-		interval_tree_remove(iter_range, &vmf->prealloc_range);
 		tocttou_interval_free(iter_range);
 	}
+	vmf->prealloc_range = RB_ROOT_CACHED;
 #endif
 	return ret;
 }
@@ -3987,9 +3997,9 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 			
 			unlock_tocttou_mutex(accessed_page);
 			up_read(&current->mm->mmap_sem);
-			//printk(KERN_ERR "Wait: PID: %lx Page: %lx Flags: %x Anonymous: %x Rmarked: %x PTE write: %x No threads: %x Op code: %ld\n", (unsigned long) task_pid_nr(current), (unsigned long) accessed_page, vmf->flags, vma_is_anonymous(vmf->vma), (unsigned) rmarked, write, get_nr_threads(current), markings->op_code);
+			printk(KERN_ERR "Wait: PID: %lx Page: %lx Flags: %x Anonymous: %x Rmarked: %x PTE write: %x No threads: %x Op code: %ld\n", (unsigned long) task_pid_nr(current), (unsigned long) accessed_page, vmf->flags, vma_is_anonymous(vmf->vma), (unsigned) rmarked, write, get_nr_threads(current), markings->op_code);
 			wait_for_completion(&markings->unmarking_completed);
-			//printk(KERN_ERR "Continue: %lx %lx\n", (unsigned long) task_pid_nr(current), (unsigned long) accessed_page);
+			printk(KERN_ERR "Continue: %lx %lx\n", (unsigned long) task_pid_nr(current), (unsigned long) accessed_page);
 			down_read(&current->mm->mmap_sem);
 			lock_tocttou_mutex(accessed_page);
 
@@ -4052,6 +4062,7 @@ static vm_fault_t __handle_mm_fault(struct vm_area_struct *vma,
 		.flags = flags,
 		.pgoff = linear_page_index(vma, address),
 		.gfp_mask = __get_fault_gfp_mask(vma),
+		.prealloc_range = RB_ROOT_CACHED,
 	};
 	unsigned int dirty = flags & FAULT_FLAG_WRITE;
 	struct mm_struct *mm = vma->vm_mm;

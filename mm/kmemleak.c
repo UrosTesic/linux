@@ -179,7 +179,7 @@ struct kmemleak_object {
 /* include ASCII after the hex output */
 #define HEX_ASCII		1
 /* max number of lines to be printed */
-#define HEX_MAX_LINES		2
+#define HEX_MAX_LINES		6
 
 /* the list of all allocated objects */
 static LIST_HEAD(object_list);
