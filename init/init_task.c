@@ -183,9 +183,9 @@ struct task_struct init_task
 #endif
 #ifdef CONFIG_TOCTTOU_PROTECTION
 	.tocttou_syscall = 0,
-	.tocttou_mutex_taken = 0,
 	.marked_pages_list = LIST_HEAD_INIT(init_task.marked_pages_list),
-	.marked_files_list = LIST_HEAD_INIT(init_task.marked_files_list)
+	.marked_files_list = LIST_HEAD_INIT(init_task.marked_files_list),
+	.marked_ranges_sem_taken = 0
 #endif
 };
 EXPORT_SYMBOL(init_task);

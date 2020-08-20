@@ -2127,7 +2127,7 @@ static __latent_entropy struct task_struct *copy_process(
 	INIT_LIST_HEAD(&p->deferred_writes_list);
 	INIT_LIST_HEAD(&p->marked_pages_list);
 	INIT_LIST_HEAD(&p->marked_files_list);
-	p->tocttou_mutex_taken = 0;
+	p->marked_ranges_sem_taken = 0;
 #endif
 
 	cgroup_threadgroup_change_begin(current);

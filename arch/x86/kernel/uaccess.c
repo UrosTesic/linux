@@ -19,9 +19,19 @@ raw_copy_to_user(void __user *to, const void *from, unsigned long n)
 	unsigned long end;
 	unsigned long write_to;
 	unsigned long read_from;
+	unsigned long saved_marked_ranges_stamp;
+	unsigned long deferred_writes_count;
 	struct interval_tree_node *check;
 
+	struct tocttou_deferred_write *iter;
+	struct tocttou_deferred_write *temp;
+
+	volatile unsigned long *marked_ranges_stamp;
+	volatile unsigned long *marked_ranges_sem_taken;
+
+retry:
 	//printk(KERN_ERR"%u Copy_to_user Start\n", current->pid);
+
 	write_to = (unsigned long) to;
 	read_from = (unsigned long) from;
 
@@ -29,9 +39,18 @@ raw_copy_to_user(void __user *to, const void *from, unsigned long n)
 	end = (unsigned long) to + n;
 
 	bytes_left = 0;
-
+	deferred_writes_count = 0;
+	marked_ranges_sem_taken = &current->marked_ranges_sem_taken;
+	
 	if (current->mm && current->op_code != -1) {
+		//printk(KERN_ERR"%u Copy_to_user Entered the protection\n", current->pid);
+		marked_ranges_stamp = &current->mm->marked_ranges_stamp;
+		
+
 		down_read(&current->mm->marked_ranges_sem);
+		*marked_ranges_sem_taken = 1;
+		saved_marked_ranges_stamp = *marked_ranges_stamp;
+
 		check = interval_tree_iter_first(&current->mm->marked_ranges_root, start, end-1);
 
 		while (check) {
@@ -41,6 +60,14 @@ raw_copy_to_user(void __user *to, const void *from, unsigned long n)
 				unsigned long write_length = local_end - write_to;
 
 				bytes_left += __raw_copy_to_user((void *)write_to, (void *) read_from, write_length);
+				
+				if (!*marked_ranges_sem_taken) {
+					//printk(KERN_ERR"%u Copy_to_user Protection sem check\n", current->pid);
+					down_read(&current->mm->marked_ranges_sem);
+					
+					if (*marked_ranges_stamp != saved_marked_ranges_stamp)
+						goto prepare_retry;
+				}
 				write_to += write_length;
 				read_from += write_length;
 			}
@@ -60,6 +87,7 @@ raw_copy_to_user(void __user *to, const void *from, unsigned long n)
 				new_node->data = temp_data;
 
 				list_add_tail(&new_node->other_nodes, &current->deferred_writes_list);
+				deferred_writes_count++;
 
 				write_to += write_length;
 				read_from += write_length;
@@ -73,18 +101,44 @@ raw_copy_to_user(void __user *to, const void *from, unsigned long n)
 
 	if (write_to < end) {
 		unsigned long write_length = end - write_to;
+		//printk(KERN_ERR"%u Copy_to_user Expected path\n", current->pid);
 
 		bytes_left += __raw_copy_to_user((void *) write_to, (void *) read_from, write_length);
+
+		if (current->mm && current->op_code != -1 && !*marked_ranges_sem_taken) {
+			//printk(KERN_ERR"%u Copy_to_user Expected path check\n", current->pid);
+			down_read(&current->mm->marked_ranges_sem);
+			
+			if (*marked_ranges_stamp != saved_marked_ranges_stamp)
+				goto prepare_retry;
+		}
+
 		write_to += write_length;
 		read_from += write_length;
 
 	}
 
 	if (current->mm && current->op_code != -1) {
+		//printk(KERN_ERR"%u Copy_to_user End free sem\n", current->pid);
 		up_read(&current->mm->marked_ranges_sem);
+		*marked_ranges_sem_taken = 0;
 	}
-	// printk(KERN_ERR"%u Copy_to_user End\n", current->pid);
+	//printk(KERN_ERR"%u Copy_to_user End\n", current->pid);
 	return bytes_left;
+
+prepare_retry:
+	//printk(KERN_ERR"%u Copy_to_user Prepare retry\n", current->pid);
+	up_read(&current->mm->marked_ranges_sem);
+	list_for_each_entry_safe_reverse(iter, temp, &current->deferred_writes_list, other_nodes) {
+		if (!deferred_writes_count)
+			break;
+
+		list_del(&iter->other_nodes);
+		tocttou_deferred_write_free(iter);
+		deferred_writes_count--;
+	}
+	
+	goto retry;
 }
 EXPORT_SYMBOL(raw_copy_to_user);
 #endif
@@ -114,6 +168,8 @@ EXPORT_SYMBOL(_copy_from_user);
 void
 _mark_user_pages_read_only(const void __user *from, unsigned long n)
 {
+	// Disable protection for all calls
+	return;
 	unsigned long address;
 	struct vm_area_struct *vma;
 	
@@ -124,19 +180,43 @@ _mark_user_pages_read_only(const void __user *from, unsigned long n)
 		return;
 	}
 	switch (current->op_code) {
-		//case __NR_write:
 		case __NR_futex:
 		case __NR_poll:
 		case __NR_select:
 		case __NR_execve:
-		//case __NR_writev:
-		//case __NR_pwrite64:
-		//case __NR_pwritev2:
 		case __NR_finit_module:
 		case __NR_exit:
 		case __NR_pselect6:
 		case __NR_ppoll:
 		case __NR_rt_sigtimedwait:
+		case __NR_nanosleep:
+
+		case __NR_writev:
+		case __NR_pwrite64:
+		case __NR_pwritev2:
+		case __NR_write:
+
+		case __NR_epoll_ctl:
+		case __NR_close:
+		//case __NR_write:
+		case __NR_read:
+		case __NR_fcntl:
+		case __NR_connect:
+		case __NR_recvfrom:
+		case __NR_epoll_wait:
+		//case __NR_futex:
+		case __NR_accept4:
+		case __NR_openat:
+		case __NR_socket:
+		//case __NR_writev:
+		case __NR_shutdown:
+		case __NR_fstat:
+		case __NR_sendfile:
+		case __NR_stat:
+		case __NR_mmap:
+		case __NR_munmap:
+		case __NR_getsockname:
+		case __NR_times:
 		case -1:
 			return;
 	}
@@ -395,6 +475,7 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
 
 		
 		interval_tree_insert(new_range, &vma->vm_mm->marked_ranges_root);
+		vma->vm_mm->marked_ranges_stamp++;
 		pte_t * ppte = pvmw.pte;
 		set_pte_at(vma->vm_mm, pvmw.address, ppte, pte_rmark(*ppte));
 
@@ -461,6 +542,7 @@ static bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
 			//printk(KERN_ERR "Remove %u: %lx - %lx\n", current->pid, range->start, range->last);
 			interval_tree_remove(range, &vma->vm_mm->marked_ranges_root);
 			tocttou_interval_free(range);
+			vma->vm_mm->marked_ranges_stamp++;
 		}
 
 	}
@@ -622,6 +704,7 @@ retry:
 
 				
 				interval_tree_insert(new_range, &vma->vm_mm->marked_ranges_root);
+				vma->vm_mm->marked_ranges_stamp++;
 
 				set_pte_at(current->mm, vaddr, ptep, (pte_rmark(entry)));
 

@@ -39,6 +39,7 @@ struct mm_struct init_mm = {
 #ifdef CONFIG_TOCTTOU_PROTECTION
 	.marked_ranges_root = RB_ROOT_CACHED,
 	.marked_ranges_sem = __RWSEM_INITIALIZER(init_mm.marked_ranges_sem),
+	.marked_ranges_stamp = 0,
 #endif
 	INIT_MM_CONTEXT(init_mm)
 };

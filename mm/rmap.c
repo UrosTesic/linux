@@ -180,6 +180,13 @@ int __anon_vma_prepare(struct vm_area_struct *vma)
 
 	might_sleep();
 
+#ifdef CONFIG_TOCTTOU_PROTECTION
+	if (current->mm && current->op_code != -1 && current->marked_ranges_sem_taken) {
+		current->marked_ranges_sem_taken = 0;
+		up_read(&current->mm->marked_ranges_sem);
+	}
+#endif
+
 	avc = anon_vma_chain_alloc(GFP_KERNEL);
 	if (!avc)
 		goto out_enomem;

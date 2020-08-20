@@ -1383,6 +1383,13 @@ void do_user_addr_fault(struct pt_regs *regs,
 	 * 1. Failed to acquire mmap_sem, and
 	 * 2. The access did not originate in userspace.
 	 */
+#ifdef CONFIG_TOCTTOU_PROTECTION
+	if (current->mm && current->op_code != -1 && current->marked_ranges_sem_taken) {
+		current->marked_ranges_sem_taken = 0;
+		up_read(&current->mm->marked_ranges_sem);
+	}
+#endif
+	
 	if (unlikely(!down_read_trylock(&mm->mmap_sem))) {
 		if (!user_mode(regs) && !search_exception_tables(regs->ip)) {
 			/*

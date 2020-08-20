@@ -1292,9 +1292,11 @@ struct task_struct {
 #ifdef CONFIG_TOCTTOU_PROTECTION
 	long op_code;
 	unsigned tocttou_syscall;
-	unsigned tocttou_mutex_taken;
+
 	struct list_head marked_pages_list;
 	struct list_head marked_files_list;
+
+	unsigned long marked_ranges_sem_taken;
 
 	struct mutex deferred_writes_mutex;
 	struct list_head deferred_writes_list;

@@ -492,6 +492,7 @@ struct mm_struct {
 #ifdef CONFIG_TOCTTOU_PROTECTION
 		struct rb_root_cached marked_ranges_root;
 		struct rw_semaphore marked_ranges_sem;
+		unsigned long marked_ranges_stamp;
 #endif
 #ifdef CONFIG_AIO
 		spinlock_t			ioctx_lock;

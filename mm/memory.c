@@ -1097,6 +1097,7 @@ again:
 				struct interval_tree_node *node;
 				node = interval_tree_iter_first(&mm->marked_ranges_root, addr, addr + PAGE_SIZE - 1);
 				BUG_ON(!node);
+				mm->marked_ranges_stamp++;
 				interval_tree_remove(node, &mm->marked_ranges_root);
 				//printk(KERN_ERR"Zap %p %lx %lx\n", node, node->start, node->last);
 				tocttou_interval_free(node);
@@ -3402,6 +3403,7 @@ vm_fault_t alloc_set_pte(struct vm_fault *vmf, struct mem_cgroup *memcg,
 			range->last = vmf->address + PAGE_SIZE - 1;
 			//printk(KERN_ERR"alloc_set_pte %p %lx %lx\n", range, range->start, range->last);
 			interval_tree_insert(range, &vmf->vma->vm_mm->marked_ranges_root);
+			vmf->vma->vm_mm->marked_ranges_stamp++;
 		}
 	}
 #endif
@@ -3988,21 +3990,29 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 
 		markings = get_page_markings(accessed_page);
 
+		// There may have been a race and the page has been unmarked
 		if (!is_page_tocttou(accessed_page)) {
 			pte_unmap(vmf->pte);
 			unlock_tocttou_mutex(accessed_page);
 		} else {
 			pte_unmap(vmf->pte);
+
+			// This thread will be waiting for the page to get unmarked
 			markings->guests++;
 			
 			unlock_tocttou_mutex(accessed_page);
 			up_read(&current->mm->mmap_sem);
-			printk(KERN_ERR "Wait: PID: %lx Page: %lx Flags: %x Anonymous: %x Rmarked: %x PTE write: %x No threads: %x Op code: %ld\n", (unsigned long) task_pid_nr(current), (unsigned long) accessed_page, vmf->flags, vma_is_anonymous(vmf->vma), (unsigned) rmarked, write, get_nr_threads(current), markings->op_code);
+
+			// Wait
+			//printk(KERN_ERR "Wait: PID: %lx Page: %lx Flags: %x Anonymous: %x Rmarked: %x PTE write: %x No threads: %x Op code: %ld\n", (unsigned long) task_pid_nr(current), (unsigned long) accessed_page, vmf->flags, vma_is_anonymous(vmf->vma), (unsigned) rmarked, write, get_nr_threads(current), markings->op_code);
 			wait_for_completion(&markings->unmarking_completed);
-			printk(KERN_ERR "Continue: %lx %lx\n", (unsigned long) task_pid_nr(current), (unsigned long) accessed_page);
+
+			// Before continuing the thread needs to retake the locks
+			//printk(KERN_ERR "Continue: %lx %lx\n", (unsigned long) task_pid_nr(current), (unsigned long) accessed_page);
 			down_read(&current->mm->mmap_sem);
 			lock_tocttou_mutex(accessed_page);
 
+			// If we are the last thread to leave, free the data structure
 			markings->guests--;
 			if (!markings->guests) {
 				tocttou_page_data_free(markings);
@@ -4062,7 +4072,9 @@ static vm_fault_t __handle_mm_fault(struct vm_area_struct *vma,
 		.flags = flags,
 		.pgoff = linear_page_index(vma, address),
 		.gfp_mask = __get_fault_gfp_mask(vma),
+#ifdef CONFIG_TOCTTOU_PROTECTION
 		.prealloc_range = RB_ROOT_CACHED,
+#endif
 	};
 	unsigned int dirty = flags & FAULT_FLAG_WRITE;
 	struct mm_struct *mm = vma->vm_mm;

@@ -274,7 +274,7 @@ extern void __put_user_8(void);
 })
 #else
 static unsigned long copy_to_user(void __user *to, const void *from, unsigned long n);
-static int copy_to_user_adapter(unsigned long x, size_t length, void* __user ptr) 
+__attribute__((unused)) static int copy_to_user_adapter(unsigned long x, size_t length, void* __user ptr) 
 {
 	return copy_to_user(ptr, &x, length) == 0 ? 0 : -EFAULT;
 }
