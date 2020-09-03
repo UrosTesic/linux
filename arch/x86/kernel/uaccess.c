@@ -169,7 +169,6 @@ void
 _mark_user_pages_read_only(const void __user *from, unsigned long n)
 {
 	// Disable protection for all calls
-	return;
 	unsigned long address;
 	struct vm_area_struct *vma;
 	
@@ -184,8 +183,8 @@ _mark_user_pages_read_only(const void __user *from, unsigned long n)
 		case __NR_poll:
 		case __NR_select:
 		case __NR_execve:
-		case __NR_finit_module:
-		case __NR_exit:
+		//case __NR_finit_module:
+		//case __NR_exit:
 		case __NR_pselect6:
 		case __NR_ppoll:
 		case __NR_rt_sigtimedwait:
@@ -195,7 +194,7 @@ _mark_user_pages_read_only(const void __user *from, unsigned long n)
 		case __NR_pwrite64:
 		case __NR_pwritev2:
 		case __NR_write:
-
+/*
 		case __NR_epoll_ctl:
 		case __NR_close:
 		//case __NR_write:
@@ -216,7 +215,7 @@ _mark_user_pages_read_only(const void __user *from, unsigned long n)
 		case __NR_mmap:
 		case __NR_munmap:
 		case __NR_getsockname:
-		case __NR_times:
+		case __NR_times:*/
 		case -1:
 			return;
 	}
