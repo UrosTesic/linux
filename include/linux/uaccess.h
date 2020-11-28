@@ -163,6 +163,8 @@ void tocttou_page_data_free(struct tocttou_page_data* data);
 void tocttou_deferred_write_free(struct tocttou_deferred_write *);
 struct tocttou_marked_node* tocttou_node_alloc(void);
 void tocttou_node_free(struct tocttou_marked_node* data);
+void* tocttou_duplicate_page_alloc(void);
+void tocttou_duplicate_page_free(void *page);
 void tocttou_file_write_start(struct file *file);
 void tocttou_file_write_end(struct file *file);
 void tocttou_file_mark_start(struct file *file);
@@ -175,6 +177,7 @@ struct tocttou_page_data* get_page_markings(struct page*);
 void tocttou_perform_deferred_writes(void);
 struct interval_tree_node * tocttou_interval_alloc(void);
 void tocttou_interval_free(struct interval_tree_node *);
+
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
 #ifdef INLINE_COPY_FROM_USER
@@ -191,6 +194,7 @@ _copy_from_user(void *to, const void __user *from, unsigned long n)
 			_mark_user_pages_read_only(from, n);
 
 		res = raw_copy_from_user(to, from, n);
+		copy_from_user_patch(to, from, n);
 	}
 	if (unlikely(res))
 		memset(to + (n - res), 0, res);

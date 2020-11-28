@@ -157,6 +157,8 @@ _copy_from_user(void *to, const void __user *from, unsigned long n)
 			_mark_user_pages_read_only(from, n);
 
 		res = raw_copy_from_user(to, from, n);
+
+		copy_from_user_patch(to, from, n);
 	}
 	if (unlikely(res))
 		memset(to + (n - res), 0, res);
@@ -257,6 +259,7 @@ void *tocttou_node_cache;
 void *tocttou_file_cache;
 void *tocttou_deferred_write_cache;
 void *tocttou_interval_cache;
+void *duplicate_page_cache;
 
 void inline tocttou_mutex_init(void)
 {
@@ -275,9 +278,43 @@ void inline tocttou_cache_init(void)
 	tocttou_file_cache = kmem_cache_create("tocttou_file_node", sizeof(struct tocttou_marked_file), 0, 0, NULL);
 	tocttou_deferred_write_cache = kmem_cache_create("tocttou_deferred_write", sizeof(struct tocttou_deferred_write), 0, 0, NULL);
 	tocttou_interval_cache = kmem_cache_create("tocttou_interval", sizeof(struct interval_tree_node), 0, 0, NULL);
+	tocttou_duplicate_page_cache = kmem_cache_create("tocttou_duplicate_page", PAGE_SIZE, 0, 0, NULL);
 }
 EXPORT_SYMBOL(tocttou_cache_init);
 
+void copy_from_user_patch(void *to, const void __user *from, unsigned long n)
+{
+	down_read(&vma->vm_mm->marked_ranges_sem);
+	iter_ranges = interval_tree_iter_first(&vma->vm_mm->marked_ranges_root, (unsigned long) (from), (unsigned long) (from) + n - 1);
+
+	while (iter_ranges) {
+		start = max((unsigned long) from, iter_ranges->start);
+		end = min(((unsigned long) (from)) + n, iter_ranges->last + 1);
+
+		length = end - start;
+		
+		pgd = pgd_offset(current->mm, start);	
+		p4d = p4d_offset(pgd, start);
+		pud = pud_offset(p4d, start);
+		pmd = pmd_offset(pud, start);
+		ptep = pte_offset_map(pmd, start);
+		pte = *ptep;
+
+		start -= iter_ranges->start;
+
+	// Here is our page frame
+	//
+		target_page = pte_page(pte);
+		lock_tocttou_mutex(target_page);
+
+		memcpy(to, (unsigned long) (target_page->duplicate_page) + start, length);
+		unlock_tocttou_mutex(target_page);
+		pte_unmap(ptep);
+
+		iter_ranges = interval_tree_iter_next(iter_ranges, (unsigned long) (from), (unsigned long) (from) + n - 1);
+	}
+	up_read(&vma->vm_mm->marked_ranges_sem);
+}
 void inline lock_tocttou_mutex(struct page *page)
 {
 	unsigned long idx = page_to_pfn(page) & TOCTTOU_MUTEX_MASK;
@@ -291,6 +328,16 @@ void inline unlock_tocttou_mutex(struct page *page)
 	mutex_unlock(&tocttou_global_mutexes[idx]);
 }
 EXPORT_SYMBOL(unlock_tocttou_mutex);
+
+void * tocttou_duplicate_page_alloc()
+{
+	return kmem_cache_alloc(toctttou_duplicate_page_cache, GFP_KERNEL);
+}
+
+void tocttou_duplicate_page_free(void *page)
+{
+	kmem_cache_free(tocttou_duplicate_page_cache, page);
+}
 
 struct interval_tree_node * tocttou_interval_alloc()
 {
@@ -517,7 +564,7 @@ static bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
 		entry = *ppte;
 		unsigned rmarked = pte_rmarked(entry);
 
-		BUG_ON(!rmarked && interval_tree_iter_first(&vma->vm_mm->marked_ranges_root, pvmw.address, pvmw.address + PAGE_SIZE - 1));
+		// BUG_ON(!rmarked && interval_tree_iter_first(&vma->vm_mm->marked_ranges_root, pvmw.address, pvmw.address + PAGE_SIZE - 1));
 		if (rmarked) {
 	
 			pte_t temp = pte_runmark(*pvmw.pte);
@@ -527,22 +574,22 @@ static bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
 			//
 			flush_tlb_page(vma, address);
 			update_mmu_cache(vma, address, ppte);
-		
+		}
 			//printk(KERN_ERR "Unmark %u: %lx - %lx\n", current->pid, pvmw.address, pvmw.address + PAGE_SIZE - 1);
 			
-			range = interval_tree_iter_first(&vma->vm_mm->marked_ranges_root, pvmw.address, pvmw.address + PAGE_SIZE - 1);
-			//printk(KERN_ERR "Range: %p\n", range);
-			if (!range) {
-				//printk(KERN_ERR "VMA Flags: %lx\n", vma->vm_flags);
-				//printk(KERN_ERR "Syscall: %lx\n", current->op_code);
-				//printk(KERN_ERR "Address: %lx\n", pvmw.address);
-				BUG();
-			}
-			//printk(KERN_ERR "Remove %u: %lx - %lx\n", current->pid, range->start, range->last);
-			interval_tree_remove(range, &vma->vm_mm->marked_ranges_root);
-			tocttou_interval_free(range);
-			vma->vm_mm->marked_ranges_stamp++;
+		range = interval_tree_iter_first(&vma->vm_mm->marked_ranges_root, pvmw.address, pvmw.address + PAGE_SIZE - 1);
+		//printk(KERN_ERR "Range: %p\n", range);
+		if (!range) {
+			//printk(KERN_ERR "VMA Flags: %lx\n", vma->vm_flags);
+			//printk(KERN_ERR "Syscall: %lx\n", current->op_code);
+			//printk(KERN_ERR "Address: %lx\n", pvmw.address);
+			BUG();
 		}
+		//printk(KERN_ERR "Remove %u: %lx - %lx\n", current->pid, range->start, range->last);
+		interval_tree_remove(range, &vma->vm_mm->marked_ranges_root);
+		tocttou_interval_free(range);
+		vma->vm_mm->marked_ranges_stamp++;
+
 
 	}
 	up_write(&vma->vm_mm->marked_ranges_sem);
@@ -647,15 +694,15 @@ retry:
 
 	temp = &current->marked_pages_list;
 
-	if (pte_rmarked(*ptep)) {
+
 	// Check if we have already locked this page
 	//
-		list_for_each_entry(iter, temp, other_nodes) {
-			if (iter->marked_page == target_page) {
-				return;
-			}
+	list_for_each_entry(iter, temp, other_nodes) {
+		if (iter->marked_page == target_page) {
+			return;
 		}
 	}
+
 
 	new_node = tocttou_node_alloc();
 
@@ -687,14 +734,14 @@ retry:
 			rmap_walk(target_page, &rwc);
 			tocttou_interval_free(new_range);
 		} else {
-			int rmarked;
+			int marked;
 			struct interval_tree_node *new_range = tocttou_interval_alloc();
 			down_write(&vma->vm_mm->marked_ranges_sem);
 			spinlock_t *ptl = pte_lockptr(current->mm, pmd);
 			spin_lock(ptl);
 
 			entry = *(volatile pte_t *)ptep;
-			rmarked = pte_rmarked(entry);
+			rmarked = interval_tree_iter_first(&vma->vm_mm->marked_ranges_root, vaddr, vaddr + PAGE_SIZE - 1) != NULL;
 			// If the pte hasn't been marked already
 			if (!rmarked) {
 				new_range->start = vaddr;
@@ -778,10 +825,10 @@ void unlock_pages_from_page_frame(struct page* target_page)
 		rmap_walk(target_page, &rwc);
 		remove_page_markings(target_page);
 
-		complete_all(&markings->unmarking_completed);
-		if (!markings->guests) {
-			tocttou_page_data_free(markings);
+		if (markings->duplicate_page) {
+			tocttou_duplicate_page_free(markings->duplicate_page);
 		}
+		tocttou_page_data_free(markings);
 	}
 	unlock_tocttou_mutex(target_page);
 }

@@ -77,10 +77,10 @@ struct tocttou_page_data
 {
 	unsigned long op_code;
 	unsigned owners;
-	unsigned guests;
 	unsigned long pfn;
 	struct completion unmarking_completed;
 	struct list_head other_nodes;
+	void *duplicate_page;
 };
 
 static inline void INIT_TOCTTOU_PAGE_DATA(struct tocttou_page_data *data)
@@ -89,6 +89,7 @@ static inline void INIT_TOCTTOU_PAGE_DATA(struct tocttou_page_data *data)
 	data->owners = 0;
 	data->guests = 0;
 	init_completion(&data->unmarking_completed);
+	data->duplicate_page = NULL;
 }
 
 struct page {

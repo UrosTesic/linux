@@ -3995,28 +3995,20 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 			pte_unmap(vmf->pte);
 			unlock_tocttou_mutex(accessed_page);
 		} else {
-			pte_unmap(vmf->pte);
 
-			// This thread will be waiting for the page to get unmarked
-			markings->guests++;
-			
-			unlock_tocttou_mutex(accessed_page);
-			up_read(&current->mm->mmap_sem);
-
-			// Wait
-			//printk(KERN_ERR "Wait: PID: %lx Page: %lx Flags: %x Anonymous: %x Rmarked: %x PTE write: %x No threads: %x Op code: %ld\n", (unsigned long) task_pid_nr(current), (unsigned long) accessed_page, vmf->flags, vma_is_anonymous(vmf->vma), (unsigned) rmarked, write, get_nr_threads(current), markings->op_code);
-			wait_for_completion(&markings->unmarking_completed);
-
-			// Before continuing the thread needs to retake the locks
-			//printk(KERN_ERR "Continue: %lx %lx\n", (unsigned long) task_pid_nr(current), (unsigned long) accessed_page);
-			down_read(&current->mm->mmap_sem);
-			lock_tocttou_mutex(accessed_page);
-
-			// If we are the last thread to leave, free the data structure
-			markings->guests--;
-			if (!markings->guests) {
-				tocttou_page_data_free(markings);
+			if (!accessed_page->duplicate_page)
+			{
+				accessed_page->duplicate_page = tocttou_duplicate_page_alloc();
+				raw_copy_from_user(accessed_page->duplicate_page, (void*) (vmf->address & PAGE_OFFSET), PAGE_SIZE);
 			}
+			vmf->ptl = pte_lockptr(vmf->vma->vm_mm, vmf->pmd);
+			spin_lock(vmf->ptl);
+
+			pte_t unmarked_pte = pte_runmark(vmf->orig_pte);
+			set_pte_at(current->mm, vmf->address, vmf->pte, unmarked_pte));
+			flush_tlb_page(vma, vaddr);
+			update_mmu_cache(vma, vaddr, ptep);
+			pte_unmap_unlock(vmf->pte, vmf->ptl);
 
 			unlock_tocttou_mutex(accessed_page);
 		}
