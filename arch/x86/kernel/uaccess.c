@@ -259,7 +259,7 @@ void *tocttou_node_cache;
 void *tocttou_file_cache;
 void *tocttou_deferred_write_cache;
 void *tocttou_interval_cache;
-void *duplicate_page_cache;
+void *tocttou_duplicate_page_cache;
 
 void inline tocttou_mutex_init(void)
 {
@@ -284,10 +284,20 @@ EXPORT_SYMBOL(tocttou_cache_init);
 
 void copy_from_user_patch(void *to, const void __user *from, unsigned long n)
 {
-	down_read(&vma->vm_mm->marked_ranges_sem);
-	iter_ranges = interval_tree_iter_first(&vma->vm_mm->marked_ranges_root, (unsigned long) (from), (unsigned long) (from) + n - 1);
+	down_read(&current->mm->marked_ranges_sem);
+	struct interval_tree_node *iter_ranges = interval_tree_iter_first(&current->mm->marked_ranges_root, (unsigned long) (from), (unsigned long) (from) + n - 1);
 
 	while (iter_ranges) {
+		unsigned long start;
+		unsigned long end;
+		unsigned long length;
+		struct page * target_page;
+		pgd_t *pgd;
+		p4d_t *p4d;
+		pud_t *pud;
+		pmd_t *pmd;
+		pte_t *ptep, pte;
+		struct tocttou_page_data * markings;
 		start = max((unsigned long) from, iter_ranges->start);
 		end = min(((unsigned long) (from)) + n, iter_ranges->last + 1);
 
@@ -306,14 +316,19 @@ void copy_from_user_patch(void *to, const void __user *from, unsigned long n)
 	//
 		target_page = pte_page(pte);
 		lock_tocttou_mutex(target_page);
+		markings = get_page_markings(target_page);
 
-		memcpy(to, (unsigned long) (target_page->duplicate_page) + start, length);
+		if (markings->duplicate_page) {
+			void * memcpy_to = (void*) (((unsigned long) to) + start);
+			void * memcpy_from = (void*) ((unsigned long) (markings->duplicate_page) + start);
+			memcpy(memcpy_to, memcpy_from, length);
+		}
 		unlock_tocttou_mutex(target_page);
 		pte_unmap(ptep);
 
 		iter_ranges = interval_tree_iter_next(iter_ranges, (unsigned long) (from), (unsigned long) (from) + n - 1);
 	}
-	up_read(&vma->vm_mm->marked_ranges_sem);
+	up_read(&current->mm->marked_ranges_sem);
 }
 void inline lock_tocttou_mutex(struct page *page)
 {
@@ -331,7 +346,7 @@ EXPORT_SYMBOL(unlock_tocttou_mutex);
 
 void * tocttou_duplicate_page_alloc()
 {
-	return kmem_cache_alloc(toctttou_duplicate_page_cache, GFP_KERNEL);
+	return kmem_cache_alloc(tocttou_duplicate_page_cache, GFP_KERNEL);
 }
 
 void tocttou_duplicate_page_free(void *page)
@@ -734,7 +749,7 @@ retry:
 			rmap_walk(target_page, &rwc);
 			tocttou_interval_free(new_range);
 		} else {
-			int marked;
+			int rmarked;
 			struct interval_tree_node *new_range = tocttou_interval_alloc();
 			down_write(&vma->vm_mm->marked_ranges_sem);
 			spinlock_t *ptl = pte_lockptr(current->mm, pmd);

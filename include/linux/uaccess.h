@@ -177,6 +177,7 @@ struct tocttou_page_data* get_page_markings(struct page*);
 void tocttou_perform_deferred_writes(void);
 struct interval_tree_node * tocttou_interval_alloc(void);
 void tocttou_interval_free(struct interval_tree_node *);
+void copy_from_user_patch(void *to, const void __user *from, unsigned long n);
 
 
 #ifdef CONFIG_TOCTTOU_PROTECTION

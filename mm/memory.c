@@ -3996,18 +3996,18 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 			unlock_tocttou_mutex(accessed_page);
 		} else {
 
-			if (!accessed_page->duplicate_page)
+			if (!markings->duplicate_page)
 			{
-				accessed_page->duplicate_page = tocttou_duplicate_page_alloc();
-				raw_copy_from_user(accessed_page->duplicate_page, (void*) (vmf->address & PAGE_OFFSET), PAGE_SIZE);
+				markings->duplicate_page = tocttou_duplicate_page_alloc();
+				raw_copy_from_user(markings->duplicate_page, (void*) (vmf->address & PAGE_OFFSET), PAGE_SIZE);
 			}
 			vmf->ptl = pte_lockptr(vmf->vma->vm_mm, vmf->pmd);
 			spin_lock(vmf->ptl);
 
 			pte_t unmarked_pte = pte_runmark(vmf->orig_pte);
-			set_pte_at(current->mm, vmf->address, vmf->pte, unmarked_pte));
-			flush_tlb_page(vma, vaddr);
-			update_mmu_cache(vma, vaddr, ptep);
+			set_pte_at(current->mm, vmf->address, vmf->pte, unmarked_pte);
+			flush_tlb_page(vmf->vma, vmf->address);
+			update_mmu_cache(vmf->vma, vmf->address, vmf->pte);
 			pte_unmap_unlock(vmf->pte, vmf->ptl);
 
 			unlock_tocttou_mutex(accessed_page);

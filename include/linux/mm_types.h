@@ -87,7 +87,6 @@ static inline void INIT_TOCTTOU_PAGE_DATA(struct tocttou_page_data *data)
 {
 	data->op_code = 0;
 	data->owners = 0;
-	data->guests = 0;
 	init_completion(&data->unmarking_completed);
 	data->duplicate_page = NULL;
 }
