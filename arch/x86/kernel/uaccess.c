@@ -29,6 +29,7 @@ raw_copy_to_user(void __user *to, const void *from, unsigned long n)
 	volatile unsigned long *marked_ranges_stamp;
 	volatile unsigned long *marked_ranges_sem_taken;
 
+	current->marked_ranges_sem_taken = 0;
 retry:
 	//printk(KERN_ERR"%u Copy_to_user Start\n", current->pid);
 
@@ -248,7 +249,7 @@ _mark_user_pages_read_only(const void __user *from, unsigned long n)
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
 
-#define TOCTTOU_MUTEX_BITS 4
+#define TOCTTOU_MUTEX_BITS 2
 #define NUM_TOCTTOU_MUTEXES (1 << TOCTTOU_MUTEX_BITS)
 #define TOCTTOU_MUTEX_MASK (NUM_TOCTTOU_MUTEXES - 1)
 
@@ -271,6 +272,22 @@ void inline tocttou_mutex_init(void)
 }
 EXPORT_SYMBOL(tocttou_mutex_init);
 
+void lock_all_tocttou_mutex()
+{
+	int i;
+	for (i = 0; i < NUM_TOCTTOU_MUTEXES; i++) {
+		mutex_lock_nested(&tocttou_global_mutexes[i], i);
+	}
+}
+
+void unlock_all_tocttou_mutex()
+{
+	int i;
+	for (i = 0; i < NUM_TOCTTOU_MUTEXES; i++) {
+		mutex_unlock(&tocttou_global_mutexes[i]);
+	}
+}
+
 void inline tocttou_cache_init(void)
 {
 	tocttou_page_data_cache = kmem_cache_create("tocttou_page_data", sizeof(struct tocttou_page_data), 0, 0, NULL);
@@ -284,9 +301,19 @@ EXPORT_SYMBOL(tocttou_cache_init);
 
 void copy_from_user_patch(void *to, const void __user *from, unsigned long n)
 {
+	if (!current->mm)
+		return;
+
 	down_read(&current->mm->marked_ranges_sem);
 	struct interval_tree_node *iter_ranges = interval_tree_iter_first(&current->mm->marked_ranges_root, (unsigned long) (from), (unsigned long) (from) + n - 1);
+	up_read(&current->mm->marked_ranges_sem);
 
+	if (!iter_ranges) {
+		return;
+	} else {
+		lock_all_tocttou_mutex();
+		down_read(&current->mm->marked_ranges_sem);
+	}
 	while (iter_ranges) {
 		unsigned long start;
 		unsigned long end;
@@ -315,7 +342,6 @@ void copy_from_user_patch(void *to, const void __user *from, unsigned long n)
 	// Here is our page frame
 	//
 		target_page = pte_page(pte);
-		lock_tocttou_mutex(target_page);
 		markings = get_page_markings(target_page);
 
 		if (markings->duplicate_page) {
@@ -323,12 +349,12 @@ void copy_from_user_patch(void *to, const void __user *from, unsigned long n)
 			void * memcpy_from = (void*) ((unsigned long) (markings->duplicate_page) + start);
 			memcpy(memcpy_to, memcpy_from, length);
 		}
-		unlock_tocttou_mutex(target_page);
 		pte_unmap(ptep);
 
 		iter_ranges = interval_tree_iter_next(iter_ranges, (unsigned long) (from), (unsigned long) (from) + n - 1);
 	}
 	up_read(&current->mm->marked_ranges_sem);
+	unlock_all_tocttou_mutex();
 }
 void inline lock_tocttou_mutex(struct page *page)
 {
@@ -532,7 +558,7 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
 		*preallocated_range = NULL;
 		new_range->start = address;
 		new_range->last = address + PAGE_SIZE - 1;
-		//printk(KERN_ERR "Mark %u: %lx - %lx\n", current->pid, new_range->start, new_range->last);
+		printk(KERN_ERR "Mark %u: %lx - %lx\n", current->pid, new_range->start, new_range->last);
 
 		
 		interval_tree_insert(new_range, &vma->vm_mm->marked_ranges_root);
@@ -761,7 +787,7 @@ retry:
 			if (!rmarked) {
 				new_range->start = vaddr;
 				new_range->last = vaddr + PAGE_SIZE - 1;
-				//printk(KERN_ERR "Mark COW %u: %lx - %lx\n", current->pid, new_range->start, new_range->last);
+				printk(KERN_ERR "Mark COW %u: %lx - %lx\n", current->pid, new_range->start, new_range->last);
 
 				
 				interval_tree_insert(new_range, &vma->vm_mm->marked_ranges_root);

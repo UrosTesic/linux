@@ -152,6 +152,8 @@ _copy_to_user(void __user *, const void *, unsigned long);
 
 
 void lock_page_from_va(unsigned long vaddr);
+void lock_all_tocttou_mutex(void);
+void unlock_all_tocttou_mutex(void);
 void lock_tocttou_mutex(struct page*);
 void unlock_tocttou_mutex(struct page*);
 void unlock_marked_pages(void);

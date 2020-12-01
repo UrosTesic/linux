@@ -1095,11 +1095,11 @@ again:
 			
 			if (rmarked_page) {
 				struct interval_tree_node *node;
+				printk(KERN_ERR "Zap %p %lx %lx\n", node, addr, addr + PAGE_SIZE - 1);
 				node = interval_tree_iter_first(&mm->marked_ranges_root, addr, addr + PAGE_SIZE - 1);
 				BUG_ON(!node);
 				mm->marked_ranges_stamp++;
 				interval_tree_remove(node, &mm->marked_ranges_root);
-				//printk(KERN_ERR"Zap %p %lx %lx\n", node, node->start, node->last);
 				tocttou_interval_free(node);
 			}
 #endif
