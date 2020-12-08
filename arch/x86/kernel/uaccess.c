@@ -303,7 +303,6 @@ void copy_from_user_patch(void *to, const void __user *from, unsigned long n)
 {
 	if (!current->mm)
 		return;
-
 	down_read(&current->mm->marked_ranges_sem);
 	struct interval_tree_node *iter_ranges = interval_tree_iter_first(&current->mm->marked_ranges_root, (unsigned long) (from), (unsigned long) (from) + n - 1);
 	up_read(&current->mm->marked_ranges_sem);
@@ -311,6 +310,7 @@ void copy_from_user_patch(void *to, const void __user *from, unsigned long n)
 	if (!iter_ranges) {
 		return;
 	} else {
+		//printk(KERN_ERR "COPY_FROM_USER_PATCH\n");
 		lock_all_tocttou_mutex();
 		down_read(&current->mm->marked_ranges_sem);
 	}
@@ -558,7 +558,7 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
 		*preallocated_range = NULL;
 		new_range->start = address;
 		new_range->last = address + PAGE_SIZE - 1;
-		printk(KERN_ERR "Mark %u: %lx - %lx\n", current->pid, new_range->start, new_range->last);
+		//printk(KERN_ERR "Mark %u: %lx - %lx\n", current->pid, new_range->start, new_range->last);
 
 		
 		interval_tree_insert(new_range, &vma->vm_mm->marked_ranges_root);
@@ -616,21 +616,22 @@ static bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
 			flush_tlb_page(vma, address);
 			update_mmu_cache(vma, address, ppte);
 		}
-			//printk(KERN_ERR "Unmark %u: %lx - %lx\n", current->pid, pvmw.address, pvmw.address + PAGE_SIZE - 1);
+		//printk(KERN_ERR "Unmark %u: %lx - %lx\n", current->pid, pvmw.address, pvmw.address + PAGE_SIZE - 1);
 			
 		range = interval_tree_iter_first(&vma->vm_mm->marked_ranges_root, pvmw.address, pvmw.address + PAGE_SIZE - 1);
 		//printk(KERN_ERR "Range: %p\n", range);
-		if (!range) {
+		//if (!range) {
 			//printk(KERN_ERR "VMA Flags: %lx\n", vma->vm_flags);
 			//printk(KERN_ERR "Syscall: %lx\n", current->op_code);
 			//printk(KERN_ERR "Address: %lx\n", pvmw.address);
-			BUG();
-		}
+		//	BUG();
+		//}
 		//printk(KERN_ERR "Remove %u: %lx - %lx\n", current->pid, range->start, range->last);
-		interval_tree_remove(range, &vma->vm_mm->marked_ranges_root);
-		tocttou_interval_free(range);
-		vma->vm_mm->marked_ranges_stamp++;
-
+		if (range) {
+			interval_tree_remove(range, &vma->vm_mm->marked_ranges_root);
+			tocttou_interval_free(range);
+			vma->vm_mm->marked_ranges_stamp++;
+		}
 
 	}
 	up_write(&vma->vm_mm->marked_ranges_sem);
@@ -787,7 +788,7 @@ retry:
 			if (!rmarked) {
 				new_range->start = vaddr;
 				new_range->last = vaddr + PAGE_SIZE - 1;
-				printk(KERN_ERR "Mark COW %u: %lx - %lx\n", current->pid, new_range->start, new_range->last);
+				//printk(KERN_ERR "Mark COW %u: %lx - %lx\n", current->pid, new_range->start, new_range->last);
 
 				
 				interval_tree_insert(new_range, &vma->vm_mm->marked_ranges_root);
