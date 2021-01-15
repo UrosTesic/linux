@@ -503,10 +503,6 @@ static ssize_t __vfs_write(struct file *file, const char __user *p,
 	else
 		result = -EINVAL;
 
-#ifdef CONFIG_TOCTTOU_PROTECTION
-	tocttou_file_write_end(file);
-#endif
-
 	return result;
 }
 

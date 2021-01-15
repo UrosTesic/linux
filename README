@@ -16,3 +16,31 @@ several of them using the Restructured Text markup notation.
 Please read the Documentation/process/changes.rst file, as it contains the
 requirements for building and running the kernel, and information about
 the problems which may result by upgrading your kernel.
+
+
+For Atri:
+=============
+
+On the desktop machine, there are 2 separate Linux distributions. One of the logs into Ubuntu Desktop, and the other one to
+Ubuntu Server for testing. Ubuntu Desktop has kernel version 5.3.0 if you need to differentiate them somehow in GRUB.
+
+The location of the project is: ~/Projects/Linux.
+The password for Ubuntu Desktop is: smrtfasizmuslobodanarodu (death to fascism - freedom to the people)
+
+In ~/Projects/Linux you have several scripts (copy_*) which extract the appropriate *.tar archives to the HDD. copy_current.sh
+extracts the current kernel tar archive from the linux subdirectory. The tar archive can be built using (sudo) make -j8 tar-pkg.
+The configuration is edited using: make menuconfig.
+
+After building the kernel and running the script (extract the kernel, strip the modules of symbols, restart) boot
+Ubuntu Server - kernel version 4 (not 5.4.0-rc3). Log in and update GRUB, initramfs and reboot. Then you can boot into the
+new kernel.
+
+To boot into the test environment, boot into 5.4.0-rc3+.
+That gives you access to Ubuntu Server:
+username: utesic
+password: testmachine
+
+The test environment boots from the HDD which is connected to the USB3 port.
+
+
+

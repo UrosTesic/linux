@@ -11,6 +11,16 @@
 #include <uapi/asm/unistd_64.h>
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
+// The idea here is to partition the range to which we write into marked and
+// unmarked ranges. Unmarked ranges get written to directly, but marked ranges
+// are not touched. Instead, the writes are save for later.
+// We accomplish this by allocating new memory, writing to it and storing the
+// pointer in a new data structure.
+//
+// The problem is that a page fault may happen (writing to a page on disk). In
+// that case we will need to release the locks that we hold, and let the handler
+// take them. After the fault, we retake the locks and restart the write if
+// needed.
 unsigned long __must_check
 raw_copy_to_user(void __user *to, const void *from, unsigned long n)
 {
@@ -43,29 +53,44 @@ retry:
 	deferred_writes_count = 0;
 	marked_ranges_sem_taken = &current->marked_ranges_sem_taken;
 	
+	// Are we in a system-call (opcode) and in a non-init process (current->mm)?
 	if (current->mm && current->op_code != -1) {
 		//printk(KERN_ERR"%u Copy_to_user Entered the protection\n", current->pid);
+
+		// Obtain the current timestamp of the marked ranges metadata
 		marked_ranges_stamp = &current->mm->marked_ranges_stamp;
 		
-
+		// Lock the marked ranges metadata for reading
 		down_read(&current->mm->marked_ranges_sem);
+
+		// We track if the semaphore is taken, to release it if needed
 		*marked_ranges_sem_taken = 1;
+
+		// We cache the timestamp to check for changes when the locks are released
 		saved_marked_ranges_stamp = *marked_ranges_stamp;
 
+		// Find a marked range
 		check = interval_tree_iter_first(&current->mm->marked_ranges_root, start, end-1);
 
+		// The ranges will consist of marked and unmarked ranges:
+		// UNMARKED || MARKED || UNMARKED || MARKED || ... || MARKED || UNMARKED
+		//
 		while (check) {
 			
+			// We first write to unmarked pages
 			if (write_to < check->start) {
+				//
 				unsigned long local_end = min(end, check->start);
 				unsigned long write_length = local_end - write_to;
 
 				bytes_left += __raw_copy_to_user((void *)write_to, (void *) read_from, write_length);
 				
+				// Check if the page-fault handler has forced us to release the lock
 				if (!*marked_ranges_sem_taken) {
 					//printk(KERN_ERR"%u Copy_to_user Protection sem check\n", current->pid);
 					down_read(&current->mm->marked_ranges_sem);
 					
+					// Restart if the metadata has been updated
 					if (*marked_ranges_stamp != saved_marked_ranges_stamp)
 						goto prepare_retry;
 				}
@@ -73,13 +98,16 @@ retry:
 				read_from += write_length;
 			}
 
+			// Write to a marked range
 			{
 				struct tocttou_deferred_write *new_node;
 				unsigned long local_end = min(end, check->last + 1);
 				unsigned long write_length = local_end - write_to;
 
+				// Allocate memory
 				void* temp_data = kmalloc(write_length, GFP_KERNEL);
 
+				// Copy the data to the newly allocated memory
 				memcpy(temp_data, (void*) read_from, write_length);
 
 				new_node = tocttou_deferred_write_alloc();
@@ -87,25 +115,31 @@ retry:
 				new_node->length = write_length;
 				new_node->data = temp_data;
 
+				// Update the list with the new deferred write
 				list_add_tail(&new_node->other_nodes, &current->deferred_writes_list);
 				deferred_writes_count++;
 
+				// Update the write pointers
 				write_to += write_length;
 				read_from += write_length;
 				bytes_left += 0;
 			}
 
+			// Next range
 			check = interval_tree_iter_next(check, start, end-1);
 		}
 		
 	}
 
+	// Final unmarked memory range, if it exists
 	if (write_to < end) {
 		unsigned long write_length = end - write_to;
 		//printk(KERN_ERR"%u Copy_to_user Expected path\n", current->pid);
 
+		// Write directly to mem
 		bytes_left += __raw_copy_to_user((void *) write_to, (void *) read_from, write_length);
 
+		// React to a possible page-fault
 		if (current->mm && current->op_code != -1 && !*marked_ranges_sem_taken) {
 			//printk(KERN_ERR"%u Copy_to_user Expected path check\n", current->pid);
 			down_read(&current->mm->marked_ranges_sem);
@@ -119,16 +153,21 @@ retry:
 
 	}
 
+	// Release the locks
 	if (current->mm && current->op_code != -1) {
 		//printk(KERN_ERR"%u Copy_to_user End free sem\n", current->pid);
 		up_read(&current->mm->marked_ranges_sem);
 		*marked_ranges_sem_taken = 0;
 	}
 	//printk(KERN_ERR"%u Copy_to_user End\n", current->pid);
+
+	// Exit the call
 	return bytes_left;
 
 prepare_retry:
 	//printk(KERN_ERR"%u Copy_to_user Prepare retry\n", current->pid);
+
+	// Release the locks, delete current deferred writes and free memory
 	up_read(&current->mm->marked_ranges_sem);
 	list_for_each_entry_safe_reverse(iter, temp, &current->deferred_writes_list, other_nodes) {
 		if (!deferred_writes_count)
@@ -145,6 +184,7 @@ EXPORT_SYMBOL(raw_copy_to_user);
 #endif
 
 #if defined (CONFIG_TOCTTOU_PROTECTION) && !defined(INLINE_COPY_FROM_USER)
+// We want to make sure that the changes to memory do not affect the call.
 __must_check unsigned long
 _copy_from_user(void *to, const void __user *from, unsigned long n)
 {
@@ -304,15 +344,19 @@ void copy_from_user_patch(void *to, const void __user *from, unsigned long n)
 	if (!current->mm)
 		return;
 	down_read(&current->mm->marked_ranges_sem);
-	struct interval_tree_node *iter_ranges = interval_tree_iter_first(&current->mm->marked_ranges_root, (unsigned long) (from), (unsigned long) (from) + n - 1);
+	down_read(&current->mm->duplicate_ranges_sem);
+	struct interval_tree_node *iter_ranges = interval_tree_iter_first(&current->mm->duplicate_ranges_root, (unsigned long) (from), (unsigned long) (from) + n - 1);
 	up_read(&current->mm->marked_ranges_sem);
+	up_read(&current->mm->duplicate_ranges_sem);
 
 	if (!iter_ranges) {
 		return;
 	} else {
 		//printk(KERN_ERR "COPY_FROM_USER_PATCH\n");
+		down_read(current->mm->mmap_sem);
 		lock_all_tocttou_mutex();
 		down_read(&current->mm->marked_ranges_sem);
+		down_read(&current->mm->duplicate_ranges_sem);
 	}
 	while (iter_ranges) {
 		unsigned long start;
@@ -353,8 +397,10 @@ void copy_from_user_patch(void *to, const void __user *from, unsigned long n)
 
 		iter_ranges = interval_tree_iter_next(iter_ranges, (unsigned long) (from), (unsigned long) (from) + n - 1);
 	}
+	up_read(&current->mm->duplicate_ranges_sem);
 	up_read(&current->mm->marked_ranges_sem);
 	unlock_all_tocttou_mutex();
+	up_read(&current->mm->mmap_sem);
 }
 void inline lock_tocttou_mutex(struct page *page)
 {
@@ -434,13 +480,35 @@ void tocttou_marked_file_free(struct tocttou_marked_file *data)
 
 void tocttou_file_write_start(struct file *file)
 {
-	down_write(&file->f_mapping->host->i_tocttou_sem);
+	unsigned long index;
+	struct page *page;
+
+	lock_all_tocttou_mutex();
+	down_read(&current->mm->marked_ranges_sem);
+	down_read(&current->mm->duplicate_ranges_sem);
+
+	xa_for_each(file->i_node->i_pages, index, page) {
+		if (!is_page_tocttou(page)) {
+			continue;
+		}
+		struct tocttou_page_data* marking = get_page_markings(page);
+		assert(marking != NULL);
+
+		if (marking->duplicate_page) {
+			continue;
+		}
+// PROBLEM: How do we add the appropriate metadata in all 
+		marking->duplicate_page = tocttou_duplicate_page_alloc();
+		assert(marking->duplicate_page);
+	}
+
+	up_read(&current->mm->duplicate_ranges_sem);
+	up_read(&current->mm->marked_ranges_sem);
+	unlock_all_tocttou_mutex();
+
+	
 }
 
-void tocttou_file_write_end(struct file *file)
-{
-	up_write(&file->f_mapping->host->i_tocttou_sem);
-}
 
 void tocttou_file_mark_start(struct file *file)
 {
@@ -779,6 +847,7 @@ retry:
 			int rmarked;
 			struct interval_tree_node *new_range = tocttou_interval_alloc();
 			down_write(&vma->vm_mm->marked_ranges_sem);
+			down_write(&vma->vm_mm->duplicate_ranges_sem);
 			spinlock_t *ptl = pte_lockptr(current->mm, pmd);
 			spin_lock(ptl);
 
@@ -801,6 +870,7 @@ retry:
 
 			flush_tlb_page(vma, vaddr);
 			update_mmu_cache(vma, vaddr, ptep);
+			up_write(&vma->vm_mm->duplicate_ranges_sem);
 			up_write(&vma->vm_mm->marked_ranges_sem);
 
 			if (rmarked)
@@ -814,6 +884,12 @@ retry:
 	// Increment the owners so we keep the track how many processes need to protect this page
 	//
 	markings->owners++;
+	if (target_page && !PageAnon(target_page)) {
+		if (!markings->duplicate_page) {
+			markings->duplicate_page = tocttou_duplicate_page_alloc();
+			raw_copy_from_user(markings->duplicate_page, vaddr, PAGE_SIZE);
+		}
+	}
 	
 	list_add(&new_node->other_nodes, &current->marked_pages_list);
 
