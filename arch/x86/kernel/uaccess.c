@@ -194,11 +194,15 @@ _copy_from_user(void *to, const void __user *from, unsigned long n)
 		mm_segment_t usr_seg = USER_DS;
 		kasan_check_write(to, n);
 		
+		// Check if we are accessing user pages and mark them
 		if (!__chk_range_not_ok((unsigned long) from, n, (unsigned long) usr_seg.seg))
 			_mark_user_pages_read_only(from, n);
 
+		// Perform the ordinary copy
 		res = raw_copy_from_user(to, from, n);
 
+		// Execute the patch: Overwrite the new data with the data from 
+		// duplicate pages
 		copy_from_user_patch(to, from, n);
 	}
 	if (unlikely(res))
@@ -221,7 +225,17 @@ _mark_user_pages_read_only(const void __user *from, unsigned long n)
 	if (current->flags & PF_EXITING) {
 		return;
 	}
+
+	// Here we ignore certain calls. Before benchmarking, make sure that the
+	// appropriate calls are uncommented. Alternately, you can add a preprocessor constant
+	// for different call groups
+	//
 	switch (current->op_code) {
+
+		// These calls needed to be ignored for the normal operation of the
+		// submitted version of TikTok
+		// Finit_module and exit were left after the debugging run, but the system
+		// runs perfectly fine with the protected
 		case __NR_futex:
 		case __NR_poll:
 		case __NR_select:
@@ -233,11 +247,16 @@ _mark_user_pages_read_only(const void __user *from, unsigned long n)
 		case __NR_rt_sigtimedwait:
 		case __NR_nanosleep:
 
+		// These calls were added as an optimization
+		// The OS usually is not interested in the content of write calls, so
+		// they do not need to be protected
 		case __NR_writev:
 		case __NR_pwrite64:
 		case __NR_pwritev2:
 		case __NR_write:
 /*
+		// The additional calls represent the most frequent calls in the benchmarks
+		//
 		case __NR_epoll_ctl:
 		case __NR_close:
 		//case __NR_write:
@@ -266,6 +285,8 @@ _mark_user_pages_read_only(const void __user *from, unsigned long n)
 	might_fault();
 	if (likely(access_ok(from, n))) {
 		
+		// Iterate over all pages in the copied range, mark the file they belong to (submitted TikTok version)
+		// and mark the pages
 		for (address = (unsigned long) from & PAGE_MASK; address < (unsigned long) from + n; address += PAGE_SIZE) {
 			/* Iterate through all pages and mark them as RO
 			 * Add the pages to the list of pages locked by this process
@@ -292,6 +313,9 @@ _mark_user_pages_read_only(const void __user *from, unsigned long n)
 #define TOCTTOU_MUTEX_BITS 2
 #define NUM_TOCTTOU_MUTEXES (1 << TOCTTOU_MUTEX_BITS)
 #define TOCTTOU_MUTEX_MASK (NUM_TOCTTOU_MUTEXES - 1)
+
+// Initialization, allocation and deallocation functions for different metadata
+// caches. Metadata will be frequently allocated, so it is better to use caches
 
 struct mutex tocttou_global_mutexes[NUM_TOCTTOU_MUTEXES];
 struct list_head tocttou_global_structs[NUM_TOCTTOU_MUTEXES];
@@ -339,25 +363,37 @@ void inline tocttou_cache_init(void)
 }
 EXPORT_SYMBOL(tocttou_cache_init);
 
+// The patch function for copy_from_user which executes after the main copy.
+// Its purpose is to fetch the data in the copied range that is present in
+// duplicates and overwrite the possibly altered data copied from the main pages.
+//
 void copy_from_user_patch(void *to, const void __user *from, unsigned long n)
 {
 	if (!current->mm)
 		return;
+
+	// Take the locks and check if there are marked pages in the range
 	down_read(&current->mm->marked_ranges_sem);
 	down_read(&current->mm->duplicate_ranges_sem);
 	struct interval_tree_node *iter_ranges = interval_tree_iter_first(&current->mm->duplicate_ranges_root, (unsigned long) (from), (unsigned long) (from) + n - 1);
 	up_read(&current->mm->marked_ranges_sem);
 	up_read(&current->mm->duplicate_ranges_sem);
 
+	// No marked pages? Yay!
 	if (!iter_ranges) {
 		return;
 	} else {
+		// Take the lock again
+		//
+
 		//printk(KERN_ERR "COPY_FROM_USER_PATCH\n");
 		down_read(current->mm->mmap_sem);
 		lock_all_tocttou_mutex();
 		down_read(&current->mm->marked_ranges_sem);
 		down_read(&current->mm->duplicate_ranges_sem);
 	}
+
+	// For every marked page copy its part of the range to the destination
 	while (iter_ranges) {
 		unsigned long start;
 		unsigned long end;
@@ -369,11 +405,17 @@ void copy_from_user_patch(void *to, const void __user *from, unsigned long n)
 		pmd_t *pmd;
 		pte_t *ptep, pte;
 		struct tocttou_page_data * markings;
+
+		// Keep track of the edges of the marked page and the copied range
+		// Copied range does not include the last address, marked range does include
+		// hence "+1" in the calculation
+		//
 		start = max((unsigned long) from, iter_ranges->start);
 		end = min(((unsigned long) (from)) + n, iter_ranges->last + 1);
 
 		length = end - start;
 		
+		// Traverse the page-table. TO DO: NULL checks
 		pgd = pgd_offset(current->mm, start);	
 		p4d = p4d_offset(pgd, start);
 		pud = pud_offset(p4d, start);
@@ -388,6 +430,7 @@ void copy_from_user_patch(void *to, const void __user *from, unsigned long n)
 		target_page = pte_page(pte);
 		markings = get_page_markings(target_page);
 
+		// If it has the duplicate, copy the appropriate range (from kernel to kernel)
 		if (markings->duplicate_page) {
 			void * memcpy_to = (void*) (((unsigned long) to) + start);
 			void * memcpy_from = (void*) ((unsigned long) (markings->duplicate_page) + start);
@@ -395,13 +438,19 @@ void copy_from_user_patch(void *to, const void __user *from, unsigned long n)
 		}
 		pte_unmap(ptep);
 
+		// Next range
 		iter_ranges = interval_tree_iter_next(iter_ranges, (unsigned long) (from), (unsigned long) (from) + n - 1);
 	}
+
+	// Release locks
 	up_read(&current->mm->duplicate_ranges_sem);
 	up_read(&current->mm->marked_ranges_sem);
 	unlock_all_tocttou_mutex();
 	up_read(&current->mm->mmap_sem);
 }
+
+// The rest of the functions to lock, unlock, allocate, free metadata
+
 void inline lock_tocttou_mutex(struct page *page)
 {
 	unsigned long idx = page_to_pfn(page) & TOCTTOU_MUTEX_MASK;
@@ -478,15 +527,25 @@ void tocttou_marked_file_free(struct tocttou_marked_file *data)
 	kmem_cache_free(tocttou_file_cache, data);
 }
 
+// This function needs to iterate over the cached (mapped) pages of a file
+// Unfortunately, cached pages are stored in an XArray.
+// The function has not been tested. I do not even know if I used the XArray interface
+// correctly.
 void tocttou_file_write_start(struct file *file)
 {
 	unsigned long index;
 	struct page *page;
 
+	// Take the locks
+
 	lock_all_tocttou_mutex();
 	down_read(&current->mm->marked_ranges_sem);
 	down_read(&current->mm->duplicate_ranges_sem);
 
+	// Iterate over all entries in an XArray
+	// This may take some locks
+	// Duplicate the page if it is marked and does not have a duplicate
+	//
 	xa_for_each(file->i_node->i_pages, index, page) {
 		if (!is_page_tocttou(page)) {
 			continue;
@@ -497,11 +556,14 @@ void tocttou_file_write_start(struct file *file)
 		if (marking->duplicate_page) {
 			continue;
 		}
-// PROBLEM: How do we add the appropriate metadata in all 
+// PROBLEM: How do we add the appropriate metadata 
 		marking->duplicate_page = tocttou_duplicate_page_alloc();
 		assert(marking->duplicate_page);
+		//TO DO:
+		// memcpy(...)
 	}
 
+	// Release the locks
 	up_read(&current->mm->duplicate_ranges_sem);
 	up_read(&current->mm->marked_ranges_sem);
 	unlock_all_tocttou_mutex();
@@ -509,7 +571,8 @@ void tocttou_file_write_start(struct file *file)
 	
 }
 
-
+// The function used in the old, submitted implementation that took a semaphore
+// when the file was supposed to be written to
 void tocttou_file_mark_start(struct file *file)
 {
 	struct rw_semaphore *sem = &file->f_mapping->host->i_tocttou_sem;
@@ -526,11 +589,13 @@ void tocttou_file_mark_start(struct file *file)
 	down_read(sem);
 }
 
+// Released the lock from the file
 void tocttou_file_mark_end(struct rw_semaphore *sem)
 {
 	up_read(sem);
 }
 
+// Unmarked all the files the system call locked
 void tocttou_unmark_all_files()
 {
 	struct tocttou_marked_file *iter;
@@ -543,6 +608,9 @@ void tocttou_unmark_all_files()
 	}
 }
 
+// Access the hashmap and obtain the markings for the appropriate page.
+// The marking metadata is stored in a hashmap because storing it in a
+// struct page would be too costly (1 struct page per RAM page exists in memory)
 struct tocttou_page_data* get_page_markings(struct page* page)
 {
 	struct tocttou_page_data *ptr;
@@ -550,9 +618,13 @@ struct tocttou_page_data* get_page_markings(struct page* page)
 	if (!is_page_tocttou(page))
 		return NULL;
 
+	// Get the number of the page
 	unsigned long pfn = page_to_pfn(page);
+
+	// We hash based on the last few bits
 	unsigned long idx = page_to_pfn(page) & TOCTTOU_MUTEX_MASK;
 	
+	// Check in the appropriate bucket
 	list_for_each_entry(ptr, &tocttou_global_structs[idx], other_nodes) {
 		if (ptr->pfn == pfn)
 			return ptr;
@@ -560,6 +632,8 @@ struct tocttou_page_data* get_page_markings(struct page* page)
 	return NULL;
 }
 
+// Access the hashmap and remove the page frame tied to the passed struct page
+//
 struct tocttou_page_data* remove_page_markings(struct page* page)
 {
 	struct tocttou_page_data *ptr;
@@ -582,6 +656,8 @@ struct tocttou_page_data* remove_page_markings(struct page* page)
 	return NULL;
 }
 
+// Add markings to the selected page and the hashmap
+//
 void add_page_markings(struct page* page, struct tocttou_page_data* data)
 {
 	unsigned long pfn = page_to_pfn(page);
@@ -607,6 +683,9 @@ void tocttou_node_free(struct tocttou_marked_node* data) {}
 
 #endif
 
+// This function is called in the visitor of the reverse mappings
+// It is executed once for every mapping of a physical page
+//
 static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
 		     unsigned long address, void *arg)
 {
@@ -621,6 +700,12 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
 	// Find the PTE which maps the address
 	//
 	down_write(&vma->vm_mm->marked_ranges_sem);
+
+	// PVMW performs the traversal and finds the ranges mapping the pages
+	// Generally, due to huge pages, this can be execute multiple times, but
+	// in TikTok, the loop will execute only once
+	// N.B. We cannot allocate memory inside the loop. page_vma_mapped_walk
+	// takes and releases PTL spinlocks
 	while (page_vma_mapped_walk(&pvmw)) {
 		struct interval_tree_node *new_range = *preallocated_range;
 		*preallocated_range = NULL;
@@ -628,8 +713,10 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
 		new_range->last = address + PAGE_SIZE - 1;
 		//printk(KERN_ERR "Mark %u: %lx - %lx\n", current->pid, new_range->start, new_range->last);
 
-		
+		// Insert metadata
 		interval_tree_insert(new_range, &vma->vm_mm->marked_ranges_root);
+
+		// Update the metadata timestamp
 		vma->vm_mm->marked_ranges_stamp++;
 		pte_t * ppte = pvmw.pte;
 		set_pte_at(vma->vm_mm, pvmw.address, ppte, pte_rmark(*ppte));
@@ -640,12 +727,16 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
 		update_mmu_cache(vma, address, ppte);
 	}
 	up_write(&vma->vm_mm->marked_ranges_sem);
+
+	// If we've used memory, allocate more
 	if (!*preallocated_range) {
 		*preallocated_range = tocttou_interval_alloc();
 	}
 	return true;
 }
 
+// This function is executed as a visitor function that iterates over all
+// mappings of a physical page
 static bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
 		     unsigned long address, void *arg) 
 {
@@ -653,6 +744,7 @@ static bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
 	spinlock_t *ptl;
 	struct tocttou_page_data *markings;
 
+	// Set up the structure to go over the PTEs in the current mapping
 	struct page_vma_mapped_walk pvmw = {
 		.page = page,
 		.vma = vma,
@@ -665,15 +757,20 @@ static bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
 	// Find the PTE which maps the address
 	//
 	down_write(&vma->vm_mm->marked_ranges_sem);
+
+	// Go over the PTEs in the current mapping
 	while (page_vma_mapped_walk(&pvmw)) {
 		struct interval_tree_node *range;
 		pte_t * ppte = pvmw.pte;
 
 		// R unmarking
 		entry = *ppte;
+
+		// Check if marked
 		unsigned rmarked = pte_rmarked(entry);
 
 		// BUG_ON(!rmarked && interval_tree_iter_first(&vma->vm_mm->marked_ranges_root, pvmw.address, pvmw.address + PAGE_SIZE - 1));
+		// If marked, unmark and flush TLB
 		if (rmarked) {
 	
 			pte_t temp = pte_runmark(*pvmw.pte);
@@ -685,8 +782,10 @@ static bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
 			update_mmu_cache(vma, address, ppte);
 		}
 		//printk(KERN_ERR "Unmark %u: %lx - %lx\n", current->pid, pvmw.address, pvmw.address + PAGE_SIZE - 1);
-			
+
+		// Find metadata	
 		range = interval_tree_iter_first(&vma->vm_mm->marked_ranges_root, pvmw.address, pvmw.address + PAGE_SIZE - 1);
+
 		//printk(KERN_ERR "Range: %p\n", range);
 		//if (!range) {
 			//printk(KERN_ERR "VMA Flags: %lx\n", vma->vm_flags);
@@ -695,6 +794,8 @@ static bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
 		//	BUG();
 		//}
 		//printk(KERN_ERR "Remove %u: %lx - %lx\n", current->pid, range->start, range->last);
+
+		// Remove metadata and update the timestamp
 		if (range) {
 			interval_tree_remove(range, &vma->vm_mm->marked_ranges_root);
 			tocttou_interval_free(range);
@@ -707,6 +808,8 @@ static bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
 }
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
+// Fetch a page based on the virtual address and mark it
+//
 void lock_page_from_va(unsigned long vaddr)
 {
 	pgd_t *pgd;
@@ -723,11 +826,14 @@ void lock_page_from_va(unsigned long vaddr)
 	pte_t entry;
 	unsigned retried = 0;
 
+	// The structure used for traversing all mappings of a physical page
 	struct rmap_walk_control rwc = {
 		.rmap_one = page_mark_one,
 		.anon_lock = page_lock_anon_vma_read,
 	};
 
+	// Fetch the memory segment the VA belongs to
+	//
 	vma = find_vma(current->mm, vaddr);
 	// Page walk to find the page frame
 	// TO DO: Replace with the visitor
@@ -736,13 +842,26 @@ void lock_page_from_va(unsigned long vaddr)
 	if (!vma)
 		return;
 
+	// If the page we are trying to mark is not mapped, we need to do so and
+	// to retry
+	//
 retry:
+
+	// We retry only once to prevent infinite looping
     if (retried == 2) {
 		//BUG();
 		return;
 	}
 
+	// The following pattern is used at every level of the page-table
+	// Fetch the page-table entry at the current level
+	//
     pgd = pgd_offset(current->mm, vaddr);
+
+	// If it is not mapped, release the page-table lock and populate the entry
+	// mm_populate calls the page-fault handler to bring the page to RAM
+	// Retry afterward
+	//
 	if (!pgd_present(*pgd)) {
 		//printk(KERN_ERR "Retry: %lx %lx\n", (unsigned long) task_pid_nr(current), vaddr);
 		up_read(&current->mm->mmap_sem);
@@ -800,6 +919,9 @@ retry:
 	//
 	target_page = pte_page(pte);
 
+	// Activating a page puts it at the end of the LRU queue.
+	// It practicaly eliminates the chance of swapping the page to disk
+	//
 	activate_page(target_page);
 
 	temp = &current->marked_pages_list;
@@ -837,14 +959,31 @@ retry:
 
 		struct vm_area_struct *target_vma = find_vma(current->mm, vaddr);
 
+		// There are two possibilities when marking a page: Copy-on-Write or not
+		//
+		// If the page is COW, we only need to mark the current mapping. Writes
+		// to other mappings will not affect the current memory-space.
+		//
+		// In the non-COW case, writes to other virtual memory spaces will affect
+		// other virtual memory spaces, so all of them need to be marked
+		//
+		// Non-COW case:
 		if (!is_cow_mapping(target_vma->vm_flags)) {
 			struct interval_tree_node *new_range = tocttou_interval_alloc();
 			pte_unmap(ptep);
 			rwc.arg = &new_range;
+
+			// Visit all VM spaces that map this page and mark the mapings
+			// rwc.arg holds the preallocated interval node because we cannot
+			// call kmalloc under spinlocks.
+			//
 			rmap_walk(target_page, &rwc);
 			tocttou_interval_free(new_range);
+		// COW case:
 		} else {
 			int rmarked;
+			// Preallocate needed metadata structures and take appropriate locks:
+			//
 			struct interval_tree_node *new_range = tocttou_interval_alloc();
 			down_write(&vma->vm_mm->marked_ranges_sem);
 			down_write(&vma->vm_mm->duplicate_ranges_sem);
@@ -852,20 +991,25 @@ retry:
 			spin_lock(ptl);
 
 			entry = *(volatile pte_t *)ptep;
+
+			// Check if the PTE we are interested in is already marked
+			//
 			rmarked = interval_tree_iter_first(&vma->vm_mm->marked_ranges_root, vaddr, vaddr + PAGE_SIZE - 1) != NULL;
-			// If the pte hasn't been marked already
+
 			if (!rmarked) {
 				new_range->start = vaddr;
 				new_range->last = vaddr + PAGE_SIZE - 1;
 				//printk(KERN_ERR "Mark COW %u: %lx - %lx\n", current->pid, new_range->start, new_range->last);
 
-				
+				// Insert the metadata and update the interval tree timestamp (version)
 				interval_tree_insert(new_range, &vma->vm_mm->marked_ranges_root);
 				vma->vm_mm->marked_ranges_stamp++;
 
 				set_pte_at(current->mm, vaddr, ptep, (pte_rmark(entry)));
 
 			}
+
+			// Release all locks and flush TLB and the MMU cache
 			spin_unlock(ptl);
 
 			flush_tlb_page(vma, vaddr);
@@ -873,6 +1017,8 @@ retry:
 			up_write(&vma->vm_mm->duplicate_ranges_sem);
 			up_write(&vma->vm_mm->marked_ranges_sem);
 
+			// If the memory has not been used, release it
+			//
 			if (rmarked)
 				tocttou_interval_free(new_range);
 			pte_unmap(ptep);
@@ -881,9 +1027,18 @@ retry:
 		markings = get_page_markings(target_page);
 	}
 
+	// At the end of the previous block, the markings for the physical page
+	// have been allocated or fetched
+
 	// Increment the owners so we keep the track how many processes need to protect this page
 	//
 	markings->owners++;
+
+	// If we are dealing with a file-backed page, and it doesn't have a duplicate
+	// back it up. NOTE: The algorithm will need to change to accomodate the
+	// problem with multiple system calls seeing the same memory, even though
+	// they were called with writes in between
+	//
 	if (target_page && !PageAnon(target_page)) {
 		if (!markings->duplicate_page) {
 			markings->duplicate_page = tocttou_duplicate_page_alloc();
@@ -891,6 +1046,7 @@ retry:
 		}
 	}
 	
+	// Add the page to the list of pages marked by the current thread (system call)
 	list_add(&new_node->other_nodes, &current->marked_pages_list);
 
 	unlock_tocttou_mutex(target_page);
@@ -901,6 +1057,9 @@ void lock_page_from_va(unsigned long addr) {}
 EXPORT_SYMBOL(lock_page_from_va);
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
+// This function is called at the end of the system call
+// It iterates over all saved writes, executes them, and frees the memory
+//
 void tocttou_perform_deferred_writes()
 {
 	struct tocttou_deferred_write *iter, *temp;
@@ -918,10 +1077,14 @@ EXPORT_SYMBOL(tocttou_perform_deferred_writes);
 #endif
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
+// This function visits all virtual memory spaces mapping a physical page
+// and unmarks them if needed
+//
 void unlock_pages_from_page_frame(struct page* target_page)
 {
 	struct tocttou_page_data *markings;
 
+	// Set up the visitor
 	struct rmap_walk_control rwc = {
 		.rmap_one = page_unmark_one,
 		.arg = NULL,
@@ -934,15 +1097,19 @@ void unlock_pages_from_page_frame(struct page* target_page)
 	markings = get_page_markings(target_page);
 	
 	markings->owners--;
+	// If we are the last owner, we need to deallocate the metadata structures
 	if (!markings->owners)
 	{	
 		struct permission_refs_node *iter;
 		struct permission_refs_node *temp;
 		barrier();
 		//printk("Unmarking: %p\n", target_page);
+
+		// Unmark the page everywhere
 		rmap_walk(target_page, &rwc);
 		remove_page_markings(target_page);
 
+		// Deallocate the metadata
 		if (markings->duplicate_page) {
 			tocttou_duplicate_page_free(markings->duplicate_page);
 		}

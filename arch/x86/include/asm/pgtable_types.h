@@ -70,7 +70,9 @@
 #define _PAGE_PKEY_BIT3	(_AT(pteval_t, 0))
 #endif
 #ifdef CONFIG_TOCTTOU_PROTECTION
+// The old write permissions of the page
 #define _PAGE_TOCTTOU_OLD (_AT(pteval_t, 1) << _PAGE_BIT_TOCTTOU_OLD)
+// Is the page marked?
 #define _PAGE_TOCTTOU_MARKED (_AT(pteval_t, 1) << _PAGE_BIT_TOCTTOU_MARKED)
 #endif
 #define _PAGE_PKEY_MASK (_PAGE_PKEY_BIT0 | \

@@ -285,6 +285,8 @@ __visible void do_syscall_64(unsigned long nr, struct pt_regs *regs)
 	ti = current_thread_info();
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
+// Set the initial state of the variables. We may not be in a syscall that marks
+// pages. Remember in which call we are in.
 	current->tocttou_syscall = 0;
 	current->op_code = nr;
 	//if (nr == 0xe) printk(KERN_ERR "Syscall 0xe\n");
@@ -307,6 +309,7 @@ __visible void do_syscall_64(unsigned long nr, struct pt_regs *regs)
 
 	unlock_marked_pages();
 #ifdef CONFIG_TOCTTOU_PROTECTION
+// Reset the system call information
 	current->tocttou_syscall = 0;
 	current->op_code = -1;
 #endif
@@ -316,6 +319,10 @@ __visible void do_syscall_64(unsigned long nr, struct pt_regs *regs)
 #endif
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
+// Iterate over the pages marked by the call, unmark them, free memory,
+// unmark marked files and executed saved writes.
+//
+// This is executed at the end of a system call
 void unlock_marked_pages()
 {
 	struct tocttou_marked_node *iter;

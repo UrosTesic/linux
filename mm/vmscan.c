@@ -1710,6 +1710,8 @@ static unsigned long isolate_lru_pages(unsigned long nr_to_scan,
 		total_scan += nr_pages;
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
+// Ignore marked pages when reclaiming memory
+//
 		if (page_zonenum(page) > sc->reclaim_idx || is_page_tocttou(page)) {
 #else
 		if (page_zonenum(page) > sc->reclaim_idx) {

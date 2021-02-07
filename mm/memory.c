@@ -756,6 +756,9 @@ copy_one_pte(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 	 * in the parent and the child
 	 */
 #ifdef CONFIG_TOCTTOU_PROTECTION
+	// This just makes sure that the COW is properly broken on marked pages
+	// after the fork: The new copy shouldn't be marked - it will be private
+	// after COW
 	if (is_cow_mapping(vm_flags) && (pte_write(pte) || pte_rmarked_write(pte))) {
 			if (!pte_rmarked_write(pte)) {
 				ptep_set_wrprotect(src_mm, addr, src_pte);
@@ -1015,6 +1018,9 @@ int copy_page_range(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 }
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
+// This is called during fork:
+// We make sure the duplicate ranges are handled properly: file-backed markings
+// are replicated, COW pages do not have markings in the new copy
 void
 duplicate_marked_ranges(struct mm_struct *oldmm, struct mm_struct *mm)
 {
@@ -1093,9 +1099,11 @@ again:
 			tlb_remove_tlb_entry(tlb, pte, addr);
 #ifdef CONFIG_TOCTTOU_PROTECTION
 			
+			// If we are releasing a marked page, release the metadata as well
+			// This is for the submitted version of TikTok
 			if (rmarked_page) {
 				struct interval_tree_node *node;
-				printk(KERN_ERR "Zap %p %lx %lx\n", node, addr, addr + PAGE_SIZE - 1);
+				//printk(KERN_ERR "Zap %p %lx %lx\n", node, addr, addr + PAGE_SIZE - 1);
 				node = interval_tree_iter_first(&mm->marked_ranges_root, addr, addr + PAGE_SIZE - 1);
 				BUG_ON(!node);
 				mm->marked_ranges_stamp++;
@@ -1286,6 +1294,7 @@ void unmap_page_range(struct mmu_gather *tlb,
 
 	BUG_ON(addr >= end);
 #ifdef CONFIG_TOCTTOU_PROTECTION
+	// Take the semaphore because we may be accessing metadata in the zap_p4d_range
 	down_write(&vma->vm_mm->marked_ranges_sem);
 #endif
 	tlb_start_vma(tlb, vma);
@@ -3389,6 +3398,11 @@ vm_fault_t alloc_set_pte(struct vm_fault *vmf, struct mem_cgroup *memcg,
 	}
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
+	// This function here is important for mapping file-backed pages
+	// Previous code has mapped the page and added reverse-mapping information
+	// We now need to add the metadata. Unfortunately, we are inside a spinlock.
+	// vmf->prealloc_range holds preallocated metadata nodes for us to use :)
+
 	/* The pte has already been added to the reverse mapping
 	 * If another thread wants to change the status of this page,
 	 * it will try to aquire PTL. Considering that we hold the PTL
@@ -3446,9 +3460,9 @@ vm_fault_t finish_fault(struct vm_fault *vmf)
 		page = vmf->page;
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
+	// Preallocate metadata in case we need to map a marked page
+
 	range = tocttou_interval_alloc();
-	//range->start = 0xb0b0b0b0b0b0b0b0;
-	//range->last =  0xe0e0e0e0e0e0e0e0;
 	interval_tree_insert(range, &vmf->prealloc_range);
 	down_write(&vmf->vma->vm_mm->marked_ranges_sem);
 #endif
@@ -3464,6 +3478,7 @@ vm_fault_t finish_fault(struct vm_fault *vmf)
 		pte_unmap_unlock(vmf->pte, vmf->ptl);
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
+	// Release the semaphore and release unused metadata nodes
 	up_write(&vmf->vma->vm_mm->marked_ranges_sem);
 	rbtree_postorder_for_each_entry_safe(iter_range, temp, &vmf->prealloc_range.rb_root, rb) {
 		tocttou_interval_free(iter_range);
@@ -3974,7 +3989,10 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 		return do_swap_page(vmf);
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
+	// Find the page from the PTE
 	accessed_page = pte_page(vmf->orig_pte);
+
+	// Check if it is marked or writable to
 	unsigned rmarked = pte_rmarked(vmf->orig_pte);
 	unsigned write = pte_write(vmf->orig_pte);
 
@@ -3982,7 +4000,8 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 		//printk(KERN_ERR"TOCTTOU Page Faulted Access: %u %ld", current->pid, current->op_code);
 
 
-	// We wait if the page is marked
+	// If the page is marked and we are not just populating the memory (FAULT_FLAG_DO_TOCTTOU)
+	// Duplicate it
 	if (is_page_tocttou(accessed_page) && rmarked && (vmf->flags & FAULT_FLAG_DO_TOCTTOU)) {
 		struct tocttou_page_data *markings;
 		
@@ -3996,16 +4015,21 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 			unlock_tocttou_mutex(accessed_page);
 		} else {
 
+			// The page does not have a duplicate, so we need to allocate it
 			if (!markings->duplicate_page)
 			{
 				markings->duplicate_page = tocttou_duplicate_page_alloc();
 				raw_copy_from_user(markings->duplicate_page, (void*) (vmf->address & PAGE_OFFSET), PAGE_SIZE);
 			}
+
+			// Take the PTL lock and edit the PTE with the unmarked permissions
 			vmf->ptl = pte_lockptr(vmf->vma->vm_mm, vmf->pmd);
 			spin_lock(vmf->ptl);
 
 			pte_t unmarked_pte = pte_runmark(vmf->orig_pte);
 			set_pte_at(current->mm, vmf->address, vmf->pte, unmarked_pte);
+
+			// Flush and unlock
 			flush_tlb_page(vmf->vma, vmf->address);
 			update_mmu_cache(vmf->vma, vmf->address, vmf->pte);
 			pte_unmap_unlock(vmf->pte, vmf->ptl);
@@ -4065,7 +4089,8 @@ static vm_fault_t __handle_mm_fault(struct vm_area_struct *vma,
 		.pgoff = linear_page_index(vma, address),
 		.gfp_mask = __get_fault_gfp_mask(vma),
 #ifdef CONFIG_TOCTTOU_PROTECTION
-		.prealloc_range = RB_ROOT_CACHED,
+	// When mapping file-backed pages, we may need some preallocated memory
+		.prealloc_range = RB_ROOT_CACHED, 
 #endif
 	};
 	unsigned int dirty = flags & FAULT_FLAG_WRITE;

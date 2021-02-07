@@ -9,6 +9,7 @@
 #define ILLEGAL_ARGUMENT -1
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
+// Dummy systemcalls that sleep long enough to check for TOCTTOU
 SYSCALL_DEFINE1(tocttou_test, long __user *, arg)
 {
     long check_copy;

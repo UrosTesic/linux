@@ -642,6 +642,7 @@ struct inode {
 	struct address_space	*i_mapping;
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
+// RW_SEM for marking files in the submitted version
 	struct rw_semaphore i_tocttou_sem;
 #endif
 

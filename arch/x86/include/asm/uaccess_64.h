@@ -120,6 +120,9 @@ raw_copy_from_user(void *dst, const void __user *src, unsigned long size)
 }
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
+// We have the marking raw_copy_to_user and __raw_copy_to_user which just copies
+// the data
+//
 extern __must_check unsigned long
 raw_copy_to_user(void __user *dst, const void *src, unsigned long size);
 

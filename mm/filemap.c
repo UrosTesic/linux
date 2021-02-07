@@ -2631,11 +2631,14 @@ void filemap_map_pages(struct vm_fault *vmf,
 	struct page *page;
 	unsigned long ctr;
 #ifdef CONFIG_TOCTTOU_PROTECTION	
+// Allocate enough metadata nodes so we do not have to allocate them
+// inside spinlocks if the mapped pages are marked
 	struct interval_tree_node *iter_range;
 	struct interval_tree_node *temp;
 
 	for (ctr = start_pgoff; ctr <= end_pgoff; ctr++) {
 		struct interval_tree_node *new_node = tocttou_interval_alloc();
+		// Constants are to make invalid node obvious when debugging
 		new_node->start = 0xa0a0a0a0a0a0a0a0;
 		new_node->last = 0xf0f0f0f0f0f0f0f0;
 		interval_tree_insert(new_node, &vmf->prealloc_range);
@@ -2699,6 +2702,7 @@ next:
 	}
 	rcu_read_unlock();
 #ifdef CONFIG_TOCTTOU_PROTECTION
+// Release the lock and free unused memory
 	up_write(&vmf->vma->vm_mm->marked_ranges_sem);
 
 

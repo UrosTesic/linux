@@ -167,6 +167,7 @@ int inode_init_always(struct super_block *sb, struct inode *inode)
 #endif
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
+// Init RW_SEM for marking files in the submitted version
 	init_rwsem(&inode->i_tocttou_sem);
 #endif
 

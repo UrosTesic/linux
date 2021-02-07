@@ -122,6 +122,7 @@ static unsigned long change_pte_range(struct vm_area_struct *vma, pmd_t *pmd,
 			}
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
+			// mprotect can only edit the old permissions
 			ptent = pte_preserve_tocttou(oldpte, ptent);
 #endif
 			

@@ -184,6 +184,11 @@ void copy_from_user_patch(void *to, const void __user *from, unsigned long n);
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
 #ifdef INLINE_COPY_FROM_USER
+
+// INLINE VERSIONS OF MARKING COPY_FROM_USER
+// These functions are frequently inlined, so we do not want to lose performance
+// by not providing an inline variant
+//
 static inline __must_check unsigned long
 _copy_from_user(void *to, const void __user *from, unsigned long n)
 {

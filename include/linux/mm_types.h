@@ -490,6 +490,7 @@ struct mm_struct {
 		struct core_state *core_state; /* coredumping support */
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
+// Metadata structures for a virtual memory space, including the timestamp
 		struct rb_root_cached marked_ranges_root;
 		struct rb_root_cached duplicate_ranges_root;
 		struct rw_semaphore marked_ranges_sem;

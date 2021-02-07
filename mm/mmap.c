@@ -3188,6 +3188,7 @@ void exit_mmap(struct mm_struct *mm)
 	}
 	vm_unacct_memory(nr_accounted);
 	#ifdef CONFIG_TOCTTOU_PROTECTION
+	// Make sure there is no allocated metadata when freeing a memory space
 		//printk(KERN_ERR"Enter ranges check\n");
 		BUG_ON(interval_tree_iter_first(&mm->marked_ranges_root, 0, -1));
 	#endif

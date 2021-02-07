@@ -185,6 +185,8 @@ static inline int pte_write(pte_t pte)
 }
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
+// Auxiliary functions used to manipulate PTE
+
 static inline int pte_rmarked(pte_t pte)
 {
 	return pte_flags(pte) & _PAGE_TOCTTOU_MARKED;
@@ -403,6 +405,7 @@ static inline pte_t pte_mkdevmap(pte_t pte)
 }
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
+// Helper functions to manipulate PTEs
 static inline pte_t pte_rmark(pte_t pte)
 {
 	pte_t temp = pte_set_flags(pte, _PAGE_TOCTTOU_MARKED);
@@ -1220,6 +1223,7 @@ static inline void ptep_set_wrprotect(struct mm_struct *mm,
 }
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
+// Edit saved permissions in the PTE
 static inline void ptep_set_rmarked_wrprotect(struct mm_struct *mm,
 				      unsigned long addr, pte_t *ptep)
 {

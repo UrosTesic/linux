@@ -181,6 +181,9 @@ int __anon_vma_prepare(struct vm_area_struct *vma)
 	might_sleep();
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
+// The deadlock in the page-fault handler happens here if I remember correctly.
+// This check may not be needed if we release the locks somewhere else as well.
+//
 	if (current->mm && current->op_code != -1 && current->marked_ranges_sem_taken) {
 		current->marked_ranges_sem_taken = 0;
 		up_read(&current->mm->marked_ranges_sem);

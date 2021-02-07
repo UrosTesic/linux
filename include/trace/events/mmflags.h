@@ -80,6 +80,7 @@
 #endif
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
+// Add the name of the page frame TikTok flag
 #define IF_HAVE_PG_TOCTTOU(flag,string) ,{1UL << flag, string}
 #else
 #define IF_HAVE_PG_TOCTTOU(flag,string)

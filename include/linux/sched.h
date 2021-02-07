@@ -1290,6 +1290,7 @@ struct task_struct {
 #endif
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
+// The metadata structures needed for each thread and locks for them
 	long op_code;
 	unsigned tocttou_syscall;
 

@@ -493,6 +493,7 @@ static ssize_t __vfs_write(struct file *file, const char __user *p,
 	ssize_t result;
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
+// Submitted version: Mark a file
 	tocttou_file_write_start(file);
 #endif
 

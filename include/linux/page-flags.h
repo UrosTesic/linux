@@ -132,6 +132,7 @@ enum pageflags {
 	PG_idle,
 #endif
 #ifdef CONFIG_TOCTTOU_PROTECTION
+// One of the flags signifies the page is marked.
 	PG_tocttou_locked,
 #endif
 	__NR_PAGEFLAGS,

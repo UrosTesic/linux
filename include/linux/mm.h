@@ -465,6 +465,7 @@ struct vm_fault {
 					 * atomic context.
 					 */
 #ifdef CONFIG_TOCTTOU_PROTECTION
+// Used to preallocate memory in case it is needed inside a spinlock
 	struct rb_root_cached prealloc_range;
 #endif
 };
@@ -1071,6 +1072,7 @@ static inline void put_page(struct page *page)
 	if (put_page_testzero(page))
 	{	
 #ifdef CONFIG_TOCTTOU_PROTECTION
+// This function returns pages to the free page cache. We want to make sure they are not marked
 		BUG_ON(is_page_tocttou(page));
 #endif
 		__put_page(page);
@@ -1979,6 +1981,7 @@ static inline void pgtable_init(void)
 	ptlock_cache_init();
 	pgtable_cache_init();
 #ifdef CONFIG_TOCTTOU_PROTECTION
+// Initialize TikTok caches with the system
 	tocttou_cache_init();
 #endif
 }

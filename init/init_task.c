@@ -182,6 +182,7 @@ struct task_struct init_task
 	.security	= NULL,
 #endif
 #ifdef CONFIG_TOCTTOU_PROTECTION
+// Init TikTok thread metadata for the init thread
 	.tocttou_syscall = 0,
 	.marked_pages_list = LIST_HEAD_INIT(init_task.marked_pages_list),
 	.marked_files_list = LIST_HEAD_INIT(init_task.marked_files_list),

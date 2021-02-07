@@ -164,6 +164,9 @@ __typeof__(__builtin_choose_expr(sizeof(x) > sizeof(0UL), 0ULL, 0UL))
  * the base register for something that ends up being a pair.
  */
 #ifdef CONFIG_TOCTTOU_PROTECTION
+// All of the macros for fetching and writing small amounts of user data
+// have been replaced with calls to copy_from/to_user.
+//
 #define get_user(x, ptr) (copy_from_user(&x, ptr, sizeof(x)) == 0 ? 0 : -EFAULT)
 #else
 #define get_user(x, ptr)						\
