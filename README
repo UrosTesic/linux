@@ -27,9 +27,19 @@ Ubuntu Server for testing. Ubuntu Desktop has kernel version 5.3.0 if you need t
 The location of the project is: ~/Projects/Linux.
 The password for Ubuntu Desktop is: smrtfasizmuslobodanarodu (death to fascism - freedom to the people)
 
+In the Linux repository execute `make menuconfig`. Then, press `/` to search
+the build flags and type `TOCTTOU`, followed by <Enter>. This should show you
+the location and the status of the TikTok flag.
+
+When you want to build the kernel, execute:
+
+```make -j8 tar-pkg```
+
+This will compile all modules and the kernel, and archive them to a tar file.
+
 In ~/Projects/Linux you have several scripts (copy_*) which extract the appropriate *.tar archives to the HDD. copy_current.sh
-extracts the current kernel tar archive from the linux subdirectory. The tar archive can be built using (sudo) make -j8 tar-pkg.
-The configuration is edited using: make menuconfig.
+extracts the current kernel tar archive from the linux subdirectory. The scripts simply extract precompiled kernels
+from the appropriate archives - they do not build the kernel. You have to do that separately.
 
 After building the kernel and running the script (extract the kernel, strip the modules of symbols, restart) boot
 Ubuntu Server - kernel version 4 (not 5.4.0-rc3). Log in and update GRUB, initramfs and reboot. Then you can boot into the
@@ -42,5 +52,67 @@ password: testmachine
 
 The test environment boots from the HDD which is connected to the USB3 port.
 
+*** Phoronix Test Suite (PTS) ***
 
+After booting the appropriate kernel, it can be benchmarked using Phoronix Test
+Suite. The command for doing so is:
 
+```phoronix-test-suite benchmark <benchmark1> <benchmark2> ... <benchmarkN>```
+
+Recommended benchmarks are:
+- apache-1.7.2
+- build-linux-kernel-1.10.1
+- git-1.1.0
+- ipc-benchmark-1.0.0
+- nginx-1.2.2
+- openssl-1.11.0
+- pybench-1.1.3
+- redis-1.2.0
+
+The exact settings for the benchmarks can be found in the previous version of
+the paper. Make sure to set the appropriate power governor before running a 
+benchmark:
+
+```echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor```
+
+Some benchmarks such as Apache, nginX and IPC can also be analyzed using perf.
+
+Perf will need permissions to access kernel symbols. Run the script in the home directory first:
+
+```./prepare_perf.sh ```
+
+To capture statistics using perf, execute: 
+
+```LINUX_PERF_DETAILS=1 phoronix-test-suite benchmark <benchmark>```
+
+This will capture the trace for the last of all executions and save it in
+a file with the name ```perf<random>```.
+
+The trace can be then copied and analyzed using perf and the `vmlinux` file containing
+symbols.
+
+*** NAS Parallel Benchmark ***
+
+This benchmark comes in two versions: OMP and MPI. OMP uses threads, while MPI
+uses processes. Both benchmarks can be found in `./NAS-Parallel-Benchmark`.
+
+Both MPI and OMP folders have bash scripts inside to run the benchmarks and
+save the results (`test-script-<full/par/off>.sh). After executing these scripts,
+the files can be processed by scripts in the paper's repository.
+
+N.B. Scripts do not change the kernel version: <full/par/off> only signifies 
+which directory should be used for the results.
+
+N.B. Make sure to use the appropriate scaling governor.
+
+*** Old TikTok version test ***
+
+`~/tocttou_test_sleep ` had been used to test waiting when writing to marked pages.
+It uses 2 threads and dummy system calls which sleep for several seconds to execute
+a TOCTTOU attack. With the changes in TikTok, it doesn't look particularly useful
+in its current form.
+
+*** Command History ***
+
+Bash history of the commands I was executing on the test machine can be found
+in this repo in the file `copied_bash_history.txt`.
