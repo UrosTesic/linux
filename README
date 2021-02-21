@@ -116,3 +116,61 @@ in its current form.
 
 Bash history of the commands I was executing on the test machine can be found
 in this repo in the file `copied_bash_history.txt`.
+
+*** Code Overview ***
+
+> Though this be madness, yet there is method in ‘t.
+>
+> -- Polonius, Hamlet (1602) by William Shakespeare
+
+The main functionality is housed in two places:
+- `mm/memory.c:3991`
+- `arch/x86/uaccess.c`
+
+The segment in `memory.c` should execute if there is a write to a marked page.
+It should then perform the necessary bookkeeping and duplication. The segment
+that follows this one take care of COW, so care should be taken when editing it.
+
+The interfaces `copy_from/to_user` are instrumented in `arch/x86/uaccess.c`.
+There are multiple version of the interfaces (inline and separate), depending
+on the compilation flags. `raw_copy_to_user` is the instrumented internal
+function that calls the uninstrumented `__raw_copy_to_user` that writes the
+data to user space. `_copy_from_user` is the instrumented function for reading
+from the user space which calls `raw_copy_from_user` to read the data.
+`copy_from_user_patch` copies over the data from the duplicate that may have
+changed in the mapped page.
+
+`_mark_user_pages_read_only` in `uaccess.c` contains the code that ignores
+certain system calls and conditions, and executes marking calls for each
+accessed page. `page_mark_one` and `page_unmark_one` are passed to the 
+reverse mapping visitor to properly mark and unmark all page mappings.
+`page_mark_one` is called in `lock_page_from_va`, while `page_unmark_one`
+is invoked from `unlock_pages_from_page_frame`.
+
+`include/asm/uaccess.h:166` declares macros which behave like `copy_from/to_user`
+for small data types. These macros are redefined to call `copy_from/to_user`.
+
+`common.c` defines the common dispatch path for the system calls. On line
+`common.c:287` the system call information is set at the start of the call. It
+is cleared on line `common.c:311`. The function `unlock_marked_pages` is
+executed at the end of the call to unmark the pages and free allocated
+resources.
+
+`memory.c` also stores some of the functions that manipulate page tables.
+`memory.c:1020` modifies `copy_page_range` which copies pages during the fork
+call. `memory.c:1102` ensures that `zap_pages_pte` frees all metadata when the
+address space is being torn down, or the PTEs are unmapped. The semaphore for
+the metadata access is taken on line `memory.c:1296` and released on
+`memory.c:1309`. `alloc_set_pte` on line `memory.c:3400` marks file-backed pages
+when they are loaded, if they are already marked in another process. The
+metadata for this marking is allocated at `memory.c:3463` and `filemap.c:2634`
+and freed at `memory.c:3481` and `filemap.c:2705`. `memory.c:758` takes care of
+COW permissions - COW can be freely broken. It will not affect other processes.
+
+`mprotect.c:124` changes only the saved permissions for marked pages during the
+mprotect syscall. `rmap.c` frees the semaphore in a case that was causing a
+deadlock in the submitted version of TikTok. There is another release at the
+start of the page-fault handler (`fault.c:1386`). `fault.c:1293` also sets
+a flag that differentiates a true page-fault from calls to mm_populate which
+are used to load swapped pages. `vmscan.c:1712` changes the swapd thread to
+ignore marked page-frames when looking for memory to free.
